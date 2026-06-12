@@ -3,6 +3,7 @@
 try:
     from ._dstar_trade_py import (
         IS_LINUX_BUILD,
+        NativeTradeApi,
         SDK_PROTOCOL_VERSION,
         create_and_free_api,
         get_api_version,
@@ -31,6 +32,7 @@ from .fields import STRUCT_MODELS, DstarField
 
 __all__ = [
     "IS_LINUX_BUILD",
+    "NativeTradeApi",
     "SDK_PROTOCOL_VERSION",
     "DstarAuthError",
     "DstarConnectionError",

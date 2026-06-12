@@ -39,6 +39,7 @@ pybind11_add_module(
     MODULE
     cpp/binding.cpp
     cpp/field_converters.cpp
+    cpp/trade_spi_adapter.cpp
 )
 target_compile_features(_dstar_trade_py PRIVATE cxx_std_17)
 target_include_directories(_dstar_trade_py PRIVATE "${DSTAR_INCLUDE_DIR}")
