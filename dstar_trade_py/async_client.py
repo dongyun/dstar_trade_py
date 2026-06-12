@@ -219,11 +219,29 @@ class AsyncDstarTradeClient(DstarTradeClient):
         self._bind_loop()
         return super().insert_order(**kwargs)
 
+    async def insert_limit_order(self, **kwargs: Any) -> int:
+        """异步提交限价报单，返回官方本地请求返回码。"""
+
+        self._bind_loop()
+        return super().insert_limit_order(**kwargs)
+
+    async def insert_market_order_if_supported(self, **kwargs: Any) -> int:
+        """异步提交市价报单请求；是否支持由官方返回码和后续回报决定。"""
+
+        self._bind_loop()
+        return super().insert_market_order_if_supported(**kwargs)
+
     async def cancel_order(self, **kwargs: Any) -> int:
         """异步提交撤单请求，返回官方本地请求返回码。"""
 
         self._bind_loop()
         return super().cancel_order(**kwargs)
+
+    async def cancel_offer_if_supported(self, **kwargs: Any) -> int:
+        """异步撤销报价请求；底层复用 ReqOrderDelete。"""
+
+        self._bind_loop()
+        return super().cancel_offer_if_supported(**kwargs)
 
     async def query_last_client_req_id(self, timeout: float = 5) -> int:
         """异步查询最新客户请求号。"""
@@ -254,6 +272,12 @@ class AsyncDstarTradeClient(DstarTradeClient):
 
         self._bind_loop()
         return super().insert_cmb_order(**kwargs)
+
+    async def insert_combo_order(self, **kwargs: Any) -> int:
+        """异步提交组合报单请求的 Pythonic 别名。"""
+
+        self._bind_loop()
+        return super().insert_combo_order(**kwargs)
 
     async def close(self) -> None:
         """关闭客户端并唤醒异步迭代器。"""

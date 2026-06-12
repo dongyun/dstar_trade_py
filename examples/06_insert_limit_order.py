@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 
 from live_common import (
-    DEFAULT_ORDER_TYPE,
     DEFAULT_VALID_TYPE,
     confirm_live_order,
     connect_login_ready,
@@ -74,7 +73,6 @@ def main() -> None:
             "direct": args.direction,
             "offset": args.offset,
             "hedge": args.hedge,
-            "order_type": DEFAULT_ORDER_TYPE,
             "valid_type": DEFAULT_VALID_TYPE,
             "account_index": account_index,
             "contract_index": args.contract_index,
@@ -90,7 +88,7 @@ def main() -> None:
         if not confirm_live_order("Insert limit order", order_params, args.confirm_live_order):
             return
 
-        ret = client.insert_order(**order_params)
+        ret = client.insert_limit_order(**order_params)
         print(f"ReqOrderInsert local return code: {ret}")
     except BaseException as exc:
         exit_with_error(exc)

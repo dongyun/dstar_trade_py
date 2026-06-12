@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 from ._dstar_trade_py import NativeTradeApi
-from .enums import RealTimeDataFilter, RunMode
+from .enums import Direction, Hedge, Offset, OrderType, RealTimeDataFilter, RunMode, ValidType
 from .errors import (
     DstarErrorCode,
     DstarRequestError,
@@ -19,10 +19,19 @@ from .errors import (
 )
 from .fields import (
     DstaApiRspLastReqIdField,
+    DstarApiAccountCommListField,
+    DstarApiCashInOutField,
+    DstarApiCmbContractField,
+    DstarApiContractField,
+    DstarApiEnquiryField,
     DstarApiFundField,
     DstarApiInitQryInfoField,
     DstarApiMatchField,
     DstarApiOrderField,
+    DstarApiOfferField,
+    DstarApiPosiProfitField,
+    DstarApiPrePositionField,
+    DstarApiPwdModField,
     DstarApiReqLoginField,
     DstarApiReqCmbOrderInsertField,
     DstarApiReqOfferInsertField,
@@ -33,12 +42,282 @@ from .fields import (
     DstarApiRspLoginField,
     DstarApiRspOrderInsertField,
     DstarApiRspPwdModField,
+    DstarApiRspSubmitInfoField,
+    DstarApiRspUdpAuthField,
+    DstarApiSeatField,
     DstarApiSubmitInfoField,
     DstarApiPositionField,
+    DstarApiTrdExchangeStateField,
+    DstarApiTrdFeeParamField,
+    DstarApiTrdMarParamField,
+    DstarApiTradeRightDelField,
+    DstarApiTradeRightField,
 )
 
 
 NativeApiFactory = Callable[[], NativeTradeApi]
+
+
+def _validate_int(name: str, value: int, *, minimum: int | None = None) -> int:
+    """校验整数参数并返回 int 值。"""
+
+    if not isinstance(value, int):
+        raise ValueError(f"{name} must be an int")
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{name} must be >= {minimum}")
+    return value
+
+
+def _validate_float(name: str, value: float, *, positive: bool = False) -> float:
+    """校验价格类浮点参数。"""
+
+    if not isinstance(value, int | float):
+        raise ValueError(f"{name} must be a number")
+    result = float(value)
+    if positive and result <= 0:
+        raise ValueError(f"{name} must be > 0")
+    return result
+
+
+def _validate_str(name: str, value: str, *, required: bool = True) -> str:
+    """校验 C++ char 数组对应的字符串参数。"""
+
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be a str")
+    if required and not value:
+        raise ValueError(f"{name} is required")
+    return value
+
+
+def _validate_enum(name: str, value: int, allowed: set[int]) -> int:
+    """校验官方 char 枚举字段的整数值。"""
+
+    numeric = _validate_int(name, value)
+    if numeric not in allowed:
+        allowed_values = ", ".join(str(item) for item in sorted(allowed))
+        raise ValueError(f"{name} must be one of: {allowed_values}")
+    return numeric
+
+
+def _validate_reference(reference: int) -> int:
+    """报单引用字段按官方注释要求必须 >= 0。"""
+
+    return _validate_int("reference", reference, minimum=0)
+
+
+class OrderRequestBuilder:
+    """订单请求构造器，只生成官方请求结构体对应的 dataclass。
+
+    该 builder 不增加官方结构体没有的字段。比如普通报单、组合报单和报价请求结构体中
+    没有交易所字段，因此这里不会凭空假设交易所参数；交易所/品种关系应由调用方通过
+    合约索引和合约编号按柜台返回的基础资料确认。
+    """
+
+    DIRECTION_VALUES = {int(Direction.BUY), int(Direction.SELL)}
+    OFFSET_VALUES = {int(Offset.OPEN), int(Offset.CLOSE), int(Offset.CLOSE_TODAY)}
+    HEDGE_VALUES = {int(Hedge.SPECULATE), int(Hedge.HEDGE)}
+    ORDER_TYPE_VALUES = {int(item) for item in OrderType}
+    VALID_TYPE_VALUES = {int(item) for item in ValidType}
+
+    @classmethod
+    def limit_order(
+        cls,
+        *,
+        direct: int,
+        offset: int,
+        hedge: int,
+        valid_type: int,
+        account_index: int,
+        contract_index: int,
+        contract_no: str,
+        order_qty: int,
+        order_price: float,
+        client_req_id: int,
+        seat_index: int = 0,
+        min_qty: int = 1,
+        reference: int = 0,
+        udp_auth_code: int = 0,
+    ) -> DstarApiReqOrderInsertField:
+        """构造 `DstarApiReqOrderInsertField` 限价报单。"""
+
+        return DstarApiReqOrderInsertField(
+            Direct=_validate_enum("direct", direct, cls.DIRECTION_VALUES),
+            Offset=_validate_enum("offset", offset, cls.OFFSET_VALUES),
+            Hedge=_validate_enum("hedge", hedge, cls.HEDGE_VALUES),
+            OrderType=int(OrderType.LIMIT),
+            ValidType=_validate_enum("valid_type", valid_type, cls.VALID_TYPE_VALUES),
+            SeatIndex=_validate_int("seat_index", seat_index, minimum=0),
+            AccountIndex=_validate_int("account_index", account_index, minimum=0),
+            ContractIndex=_validate_int("contract_index", contract_index, minimum=0),
+            ContractNo=_validate_str("contract_no", contract_no),
+            OrderQty=_validate_int("order_qty", order_qty, minimum=1),
+            MinQty=_validate_int("min_qty", min_qty, minimum=1),
+            OrderPrice=_validate_float("order_price", order_price, positive=True),
+            ClientReqId=_validate_int("client_req_id", client_req_id, minimum=0),
+            Reference=_validate_reference(reference),
+            UdpAuthCode=_validate_int("udp_auth_code", udp_auth_code, minimum=0),
+        )
+
+    @classmethod
+    def market_order_if_supported(
+        cls,
+        *,
+        direct: int,
+        offset: int,
+        hedge: int,
+        valid_type: int,
+        account_index: int,
+        contract_index: int,
+        contract_no: str,
+        order_qty: int,
+        client_req_id: int,
+        seat_index: int = 0,
+        min_qty: int = 1,
+        reference: int = 0,
+        udp_auth_code: int = 0,
+        order_price: float = 0.0,
+    ) -> DstarApiReqOrderInsertField:
+        """构造市价报单。
+
+        官方结构体仍包含 `OrderPrice` 字段。这里不假设市价单一定被柜台支持，方法名中的
+        `if_supported` 表示最终是否支持由 `ReqOrderInsert` 返回码和后续回报决定。
+        """
+
+        return DstarApiReqOrderInsertField(
+            Direct=_validate_enum("direct", direct, cls.DIRECTION_VALUES),
+            Offset=_validate_enum("offset", offset, cls.OFFSET_VALUES),
+            Hedge=_validate_enum("hedge", hedge, cls.HEDGE_VALUES),
+            OrderType=int(OrderType.MARKET),
+            ValidType=_validate_enum("valid_type", valid_type, cls.VALID_TYPE_VALUES),
+            SeatIndex=_validate_int("seat_index", seat_index, minimum=0),
+            AccountIndex=_validate_int("account_index", account_index, minimum=0),
+            ContractIndex=_validate_int("contract_index", contract_index, minimum=0),
+            ContractNo=_validate_str("contract_no", contract_no),
+            OrderQty=_validate_int("order_qty", order_qty, minimum=1),
+            MinQty=_validate_int("min_qty", min_qty, minimum=1),
+            OrderPrice=_validate_float("order_price", order_price),
+            ClientReqId=_validate_int("client_req_id", client_req_id, minimum=0),
+            Reference=_validate_reference(reference),
+            UdpAuthCode=_validate_int("udp_auth_code", udp_auth_code, minimum=0),
+        )
+
+    @classmethod
+    def combo_order(
+        cls,
+        *,
+        direct: int,
+        offset: int,
+        hedge: int,
+        order_type: int,
+        valid_type: int,
+        account_index: int,
+        contract_index1: int,
+        contract_no1: str,
+        contract_index2: int,
+        contract_no2: str,
+        order_qty: int,
+        order_price: float,
+        client_req_id: int,
+        seat_index: int = 0,
+        min_qty: int = 1,
+        reference: int = 0,
+        udp_auth_code: int = 0,
+    ) -> DstarApiReqCmbOrderInsertField:
+        """构造 `DstarApiReqCmbOrderInsertField` 组合报单。"""
+
+        return DstarApiReqCmbOrderInsertField(
+            Direct=_validate_enum("direct", direct, cls.DIRECTION_VALUES),
+            Offset=_validate_enum("offset", offset, cls.OFFSET_VALUES),
+            Hedge=_validate_enum("hedge", hedge, cls.HEDGE_VALUES),
+            OrderType=_validate_enum("order_type", order_type, cls.ORDER_TYPE_VALUES),
+            ValidType=_validate_enum("valid_type", valid_type, cls.VALID_TYPE_VALUES),
+            SeatIndex=_validate_int("seat_index", seat_index, minimum=0),
+            AccountIndex=_validate_int("account_index", account_index, minimum=0),
+            ContractIndex1=_validate_int("contract_index1", contract_index1, minimum=0),
+            ContractNo1=_validate_str("contract_no1", contract_no1),
+            ContractIndex2=_validate_int("contract_index2", contract_index2, minimum=0),
+            ContractNo2=_validate_str("contract_no2", contract_no2),
+            OrderQty=_validate_int("order_qty", order_qty, minimum=1),
+            MinQty=_validate_int("min_qty", min_qty, minimum=1),
+            OrderPrice=_validate_float("order_price", order_price),
+            ClientReqId=_validate_int("client_req_id", client_req_id, minimum=0),
+            Reference=_validate_reference(reference),
+            UdpAuthCode=_validate_int("udp_auth_code", udp_auth_code, minimum=0),
+        )
+
+    @classmethod
+    def offer(
+        cls,
+        *,
+        buy_offset: int,
+        sell_offset: int,
+        account_index: int,
+        client_req_id: int,
+        contract_index: int,
+        contract_no: str,
+        order_qty: int,
+        buy_price: float,
+        sell_price: float,
+        seat_index: int = 0,
+        enquiry_no: str = "",
+        reference: int = 0,
+        udp_auth_code: int = 0,
+    ) -> DstarApiReqOfferInsertField:
+        """构造 `DstarApiReqOfferInsertField` 报价请求。"""
+
+        return DstarApiReqOfferInsertField(
+            BuyOffset=_validate_enum("buy_offset", buy_offset, cls.OFFSET_VALUES),
+            SellOffset=_validate_enum("sell_offset", sell_offset, cls.OFFSET_VALUES),
+            AccountIndex=_validate_int("account_index", account_index, minimum=0),
+            ClientReqId=_validate_int("client_req_id", client_req_id, minimum=0),
+            ContractIndex=_validate_int("contract_index", contract_index, minimum=0),
+            ContractNo=_validate_str("contract_no", contract_no),
+            OrderQty=_validate_int("order_qty", order_qty, minimum=1),
+            BuyPrice=_validate_float("buy_price", buy_price, positive=True),
+            SellPrice=_validate_float("sell_price", sell_price, positive=True),
+            SeatIndex=_validate_int("seat_index", seat_index, minimum=0),
+            EnquiryNo=_validate_str("enquiry_no", enquiry_no, required=False),
+            Reference=_validate_reference(reference),
+            UdpAuthCode=_validate_int("udp_auth_code", udp_auth_code, minimum=0),
+        )
+
+
+class CancelRequestBuilder:
+    """撤单请求构造器，对应官方 `DstarApiReqOrderDeleteField`。"""
+
+    @classmethod
+    def order_delete(
+        cls,
+        *,
+        account_index: int,
+        client_req_id: int,
+        order_id: int,
+        system_no: str = "",
+        udp_auth_code: int = 0,
+        reference: int = 0,
+        seat_index: int = 0,
+    ) -> DstarApiReqOrderDeleteField:
+        """构造普通撤单请求。"""
+
+        return DstarApiReqOrderDeleteField(
+            AccountIndex=_validate_int("account_index", account_index, minimum=0),
+            ClientReqId=_validate_int("client_req_id", client_req_id, minimum=0),
+            UdpAuthCode=_validate_int("udp_auth_code", udp_auth_code, minimum=0),
+            Reference=_validate_reference(reference),
+            SeatIndex=_validate_int("seat_index", seat_index, minimum=0),
+            OrderId=_validate_int("order_id", order_id, minimum=0),
+            SystemNo=_validate_str("system_no", system_no, required=False),
+        )
+
+    @classmethod
+    def offer_delete_if_supported(cls, **kwargs: Any) -> DstarApiReqOrderDeleteField:
+        """构造报价撤销请求。
+
+        官方主动接口没有单独的 `ReqOfferDelete`；撤销报价只能复用
+        `DstarApiReqOrderDeleteField` / `ReqOrderDelete`，是否支持由柜台返回码和后续报价回报决定。
+        """
+
+        return cls.order_delete(**kwargs)
 
 
 @dataclass(slots=True)
@@ -327,22 +606,40 @@ class DstarTradeClient:
 
         self._ensure_ready("insert_order")
         request = DstarApiReqOrderInsertField(
-            Direct=direct,
-            Offset=offset,
-            Hedge=hedge,
-            OrderType=order_type,
-            ValidType=valid_type,
-            SeatIndex=seat_index,
-            AccountIndex=account_index,
-            ContractIndex=contract_index,
-            ContractNo=contract_no,
-            OrderQty=order_qty,
-            MinQty=min_qty,
-            OrderPrice=order_price,
-            ClientReqId=client_req_id,
-            Reference=reference,
-            UdpAuthCode=udp_auth_code,
+            Direct=_validate_enum("direct", direct, OrderRequestBuilder.DIRECTION_VALUES),
+            Offset=_validate_enum("offset", offset, OrderRequestBuilder.OFFSET_VALUES),
+            Hedge=_validate_enum("hedge", hedge, OrderRequestBuilder.HEDGE_VALUES),
+            OrderType=_validate_enum("order_type", order_type, OrderRequestBuilder.ORDER_TYPE_VALUES),
+            ValidType=_validate_enum("valid_type", valid_type, OrderRequestBuilder.VALID_TYPE_VALUES),
+            SeatIndex=_validate_int("seat_index", seat_index, minimum=0),
+            AccountIndex=_validate_int("account_index", account_index, minimum=0),
+            ContractIndex=_validate_int("contract_index", contract_index, minimum=0),
+            ContractNo=_validate_str("contract_no", contract_no),
+            OrderQty=_validate_int("order_qty", order_qty, minimum=1),
+            MinQty=_validate_int("min_qty", min_qty, minimum=1),
+            OrderPrice=_validate_float("order_price", order_price),
+            ClientReqId=_validate_int("client_req_id", client_req_id, minimum=0),
+            Reference=_validate_reference(reference),
+            UdpAuthCode=_validate_int("udp_auth_code", udp_auth_code, minimum=0),
         )
+        ret = self._require_api().req_order_insert(request.to_dict())
+        raise_for_error(ret, "ReqOrderInsert")
+        return ret
+
+    def insert_limit_order(self, **kwargs: Any) -> int:
+        """提交限价报单，返回官方本地请求返回码。"""
+
+        self._ensure_ready("insert_limit_order")
+        request = OrderRequestBuilder.limit_order(**kwargs)
+        ret = self._require_api().req_order_insert(request.to_dict())
+        raise_for_error(ret, "ReqOrderInsert")
+        return ret
+
+    def insert_market_order_if_supported(self, **kwargs: Any) -> int:
+        """提交市价报单请求；是否支持由官方返回码和后续回报决定。"""
+
+        self._ensure_ready("insert_market_order_if_supported")
+        request = OrderRequestBuilder.market_order_if_supported(**kwargs)
         ret = self._require_api().req_order_insert(request.to_dict())
         raise_for_error(ret, "ReqOrderInsert")
         return ret
@@ -361,15 +658,24 @@ class DstarTradeClient:
         """提交撤单请求，返回官方本地请求返回码。"""
 
         self._ensure_ready("cancel_order")
-        request = DstarApiReqOrderDeleteField(
-            AccountIndex=account_index,
-            ClientReqId=client_req_id,
-            UdpAuthCode=udp_auth_code,
-            Reference=reference,
-            SeatIndex=seat_index,
-            OrderId=order_id,
-            SystemNo=system_no,
+        request = CancelRequestBuilder.order_delete(
+            account_index=account_index,
+            client_req_id=client_req_id,
+            order_id=order_id,
+            system_no=system_no,
+            udp_auth_code=udp_auth_code,
+            reference=reference,
+            seat_index=seat_index,
         )
+        ret = self._require_api().req_order_delete(request.to_dict())
+        raise_for_error(ret, "ReqOrderDelete")
+        return ret
+
+    def cancel_offer_if_supported(self, **kwargs: Any) -> int:
+        """撤销报价请求；官方无独立 ReqOfferDelete，底层复用 ReqOrderDelete。"""
+
+        self._ensure_ready("cancel_offer_if_supported")
+        request = CancelRequestBuilder.offer_delete_if_supported(**kwargs)
         ret = self._require_api().req_order_delete(request.to_dict())
         raise_for_error(ret, "ReqOrderDelete")
         return ret
@@ -394,20 +700,20 @@ class DstarTradeClient:
         """提交报价请求，返回官方本地请求返回码。"""
 
         self._ensure_ready("insert_offer")
-        request = DstarApiReqOfferInsertField(
-            BuyOffset=buy_offset,
-            SellOffset=sell_offset,
-            AccountIndex=account_index,
-            ClientReqId=client_req_id,
-            ContractIndex=contract_index,
-            ContractNo=contract_no,
-            OrderQty=order_qty,
-            BuyPrice=buy_price,
-            SellPrice=sell_price,
-            SeatIndex=seat_index,
-            EnquiryNo=enquiry_no,
-            Reference=reference,
-            UdpAuthCode=udp_auth_code,
+        request = OrderRequestBuilder.offer(
+            buy_offset=buy_offset,
+            sell_offset=sell_offset,
+            account_index=account_index,
+            client_req_id=client_req_id,
+            contract_index=contract_index,
+            contract_no=contract_no,
+            order_qty=order_qty,
+            buy_price=buy_price,
+            sell_price=sell_price,
+            seat_index=seat_index,
+            enquiry_no=enquiry_no,
+            reference=reference,
+            udp_auth_code=udp_auth_code,
         )
         ret = self._require_api().req_offer_insert(request.to_dict())
         raise_for_error(ret, "ReqOfferInsert")
@@ -480,28 +786,33 @@ class DstarTradeClient:
         """提交组合报单请求，返回官方本地请求返回码。"""
 
         self._ensure_ready("insert_cmb_order")
-        request = DstarApiReqCmbOrderInsertField(
-            Direct=direct,
-            Offset=offset,
-            Hedge=hedge,
-            OrderType=order_type,
-            ValidType=valid_type,
-            SeatIndex=seat_index,
-            AccountIndex=account_index,
-            ContractIndex1=contract_index1,
-            ContractNo1=contract_no1,
-            ContractIndex2=contract_index2,
-            ContractNo2=contract_no2,
-            OrderQty=order_qty,
-            MinQty=min_qty,
-            OrderPrice=order_price,
-            ClientReqId=client_req_id,
-            Reference=reference,
-            UdpAuthCode=udp_auth_code,
+        request = OrderRequestBuilder.combo_order(
+            direct=direct,
+            offset=offset,
+            hedge=hedge,
+            order_type=order_type,
+            valid_type=valid_type,
+            account_index=account_index,
+            contract_index1=contract_index1,
+            contract_no1=contract_no1,
+            contract_index2=contract_index2,
+            contract_no2=contract_no2,
+            order_qty=order_qty,
+            order_price=order_price,
+            client_req_id=client_req_id,
+            seat_index=seat_index,
+            min_qty=min_qty,
+            reference=reference,
+            udp_auth_code=udp_auth_code,
         )
         ret = self._require_api().req_cmb_order_insert(request.to_dict())
         raise_for_error(ret, "ReqCmbOrderInsert")
         return ret
+
+    def insert_combo_order(self, **kwargs: Any) -> int:
+        """`insert_cmb_order` 的 Pythonic 别名。"""
+
+        return self.insert_cmb_order(**kwargs)
 
     def query_last_client_req_id(self, timeout: float = 5) -> int:
         """查询最新客户请求号并等待 ``rsp_last_req_id`` 响应。"""
@@ -567,24 +878,46 @@ class DstarTradeClient:
     def _convert_event_payload(self, event_name: str, payload: dict[str, Any]) -> Any:
         """按事件名把 native dict 转成对应 dataclass。"""
 
-        if event_name == "rsp_user_login":
-            return DstarApiRspLoginField.from_dict(payload)
-        if event_name == "rsp_pwd_mod":
-            return DstarApiRspPwdModField.from_dict(payload)
-        if event_name == "rsp_order_insert":
-            return DstarApiRspOrderInsertField.from_dict(payload)
-        if event_name == "rsp_order_delete":
-            return DstarApiRspOrderInsertField.from_dict(payload)
-        if event_name == "rsp_last_req_id":
-            return DstaApiRspLastReqIdField.from_dict(payload)
-        if event_name in {"rsp_order", "rtn_order"}:
-            return DstarApiOrderField.from_dict(payload)
-        if event_name in {"rsp_match", "rtn_match"}:
-            return DstarApiMatchField.from_dict(payload)
-        if event_name in {"rsp_fund", "rsp_qry_fund"}:
-            return DstarApiFundField.from_dict(payload)
-        if event_name == "rsp_position":
-            return DstarApiPositionField.from_dict(payload)
+        model_by_event = {
+            "rsp_user_login": DstarApiRspLoginField,
+            "rsp_pwd_mod": DstarApiRspPwdModField,
+            "rsp_submit_info": DstarApiRspSubmitInfoField,
+            "rsp_contract": DstarApiContractField,
+            "rsp_cmb_contract": DstarApiCmbContractField,
+            "rsp_seat": DstarApiSeatField,
+            "rsp_trd_fee_param": DstarApiTrdFeeParamField,
+            "rsp_trd_mar_param": DstarApiTrdMarParamField,
+            "rsp_trade_right": DstarApiTradeRightField,
+            "rsp_account_comm_list": DstarApiAccountCommListField,
+            "rsp_trd_exchange_state": DstarApiTrdExchangeStateField,
+            "rsp_fund": DstarApiFundField,
+            "rsp_pre_position": DstarApiPrePositionField,
+            "rsp_position": DstarApiPositionField,
+            "rsp_order": DstarApiOrderField,
+            "rsp_offer": DstarApiOfferField,
+            "rsp_match": DstarApiMatchField,
+            "rsp_cash_in_out": DstarApiCashInOutField,
+            "rsp_udp_auth": DstarApiRspUdpAuthField,
+            "rsp_order_insert": DstarApiRspOrderInsertField,
+            "rsp_offer_insert": DstarApiRspOrderInsertField,
+            "rsp_order_delete": DstarApiRspOrderInsertField,
+            "rsp_last_req_id": DstaApiRspLastReqIdField,
+            "rtn_pwd_mod": DstarApiPwdModField,
+            "rtn_order": DstarApiOrderField,
+            "rtn_match": DstarApiMatchField,
+            "rtn_cash_in_out": DstarApiCashInOutField,
+            "rtn_offer": DstarApiOfferField,
+            "rtn_enquiry": DstarApiEnquiryField,
+            "rtn_trd_exchange_state": DstarApiTrdExchangeStateField,
+            "rtn_posi_profit": DstarApiPosiProfitField,
+            "rtn_seat": DstarApiSeatField,
+            "rtn_trade_right": DstarApiTradeRightField,
+            "rtn_trade_right_del": DstarApiTradeRightDelField,
+            "rsp_qry_fund": DstarApiFundField,
+        }
+        model = model_by_event.get(event_name)
+        if model is not None:
+            return model.from_dict(payload)
         if event_name == "rsp_qry_position":
             raw_data = payload.get("data")
             position = None
@@ -628,7 +961,15 @@ class DstarTradeClient:
     def _route_event_to_queue(self, event_name: str, data: Any) -> None:
         """把转换后的事件推入分类队列，并更新同步等待缓存。"""
 
-        if event_name in {"rsp_order", "rtn_order", "rsp_order_insert", "rsp_order_delete"}:
+        if event_name in {
+            "rsp_order",
+            "rtn_order",
+            "rsp_order_insert",
+            "rsp_offer_insert",
+            "rsp_order_delete",
+            "rsp_offer",
+            "rtn_offer",
+        }:
             self.order_events.put(data)
         elif event_name in {"rsp_match", "rtn_match"} and isinstance(data, DstarApiMatchField):
             self.trade_events.put(data)
@@ -689,4 +1030,4 @@ class DstarTradeClient:
         return dict(value)
 
 
-__all__ = ["DstarClientEvent", "DstarTradeClient"]
+__all__ = ["CancelRequestBuilder", "DstarClientEvent", "DstarTradeClient", "OrderRequestBuilder"]
