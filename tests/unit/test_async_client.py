@@ -186,23 +186,24 @@ class AsyncFakeNativeTradeApi:
         return thread
 
 
-def make_client() -> tuple[AsyncDstarTradeClient, AsyncFakeNativeTradeApi]:
+def make_client(tmp_path) -> tuple[AsyncDstarTradeClient, AsyncFakeNativeTradeApi]:
     """Create an async client backed by one fake native instance."""
 
     fake = AsyncFakeNativeTradeApi()
     client = AsyncDstarTradeClient(
         front_ip="127.0.0.1",
         front_port=12345,
+        journal_path=tmp_path / "order_journal.jsonl",
         api_factory=lambda: fake,
     )
     return client, fake
 
 
-def test_async_wait_ready_uses_threadsafe_callback_delivery() -> None:
+def test_async_wait_ready_uses_threadsafe_callback_delivery(tmp_path) -> None:
     """wait_ready should be completed by a callback emitted from another thread."""
 
     async def scenario() -> None:
-        client, fake = make_client()
+        client, fake = make_client(tmp_path)
         await client.connect()
 
         waiter = asyncio.create_task(client.wait_ready(timeout=1))
@@ -217,11 +218,11 @@ def test_async_wait_ready_uses_threadsafe_callback_delivery() -> None:
     asyncio.run(scenario())
 
 
-def test_async_query_fund_and_position_wait_for_callbacks() -> None:
+def test_async_query_fund_and_position_wait_for_callbacks(tmp_path) -> None:
     """query methods should await callback data converted to dataclasses."""
 
     async def scenario() -> None:
-        client, fake = make_client()
+        client, fake = make_client(tmp_path)
         await client.connect()
         fake.emit_from_thread("api_ready", {"serial_id": 1})
         await client.wait_ready(timeout=1)
@@ -239,11 +240,11 @@ def test_async_query_fund_and_position_wait_for_callbacks() -> None:
     asyncio.run(scenario())
 
 
-def test_async_query_fund_timeout() -> None:
+def test_async_query_fund_timeout(tmp_path) -> None:
     """A missing async response should raise DstarTimeoutError."""
 
     async def scenario() -> None:
-        client, fake = make_client()
+        client, fake = make_client(tmp_path)
         fake.emit_fund = False
         await client.connect()
         fake.emit_from_thread("api_ready", {"serial_id": 1})
@@ -256,11 +257,11 @@ def test_async_query_fund_timeout() -> None:
     asyncio.run(scenario())
 
 
-def test_async_insert_and_cancel_require_ready() -> None:
+def test_async_insert_and_cancel_require_ready(tmp_path) -> None:
     """Order methods should reject calls before api_ready and return local codes after it."""
 
     async def scenario() -> None:
-        client, fake = make_client()
+        client, fake = make_client(tmp_path)
         await client.connect()
 
         with pytest.raises(DstarRequestError):
@@ -309,11 +310,11 @@ def test_async_insert_and_cancel_require_ready() -> None:
     asyncio.run(scenario())
 
 
-def test_async_iter_orders_and_trades() -> None:
+def test_async_iter_orders_and_trades(tmp_path) -> None:
     """Async iterators should receive converted order and trade events."""
 
     async def scenario() -> None:
-        client, fake = make_client()
+        client, fake = make_client(tmp_path)
         await client.connect()
         order_task = asyncio.create_task(anext(client.iter_orders()))
         trade_task = asyncio.create_task(anext(client.iter_trades()))

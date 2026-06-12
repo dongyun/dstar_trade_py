@@ -2,13 +2,35 @@
 
 from __future__ import annotations
 
+import logging
+import platform
 import queue
 import threading
 import time
+import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from ._dstar_trade_py import NativeTradeApi
+try:
+    from ._dstar_trade_py import NativeTradeApi
+except ImportError as exc:
+    if platform.system() == "Linux":
+        raise
+
+    _native_import_error = exc
+
+    class NativeTradeApi:  # type: ignore[no-redef]
+        """Non-Linux placeholder that fails clearly when instantiated."""
+
+        def __init__(self) -> None:
+            raise RuntimeError(
+                "NativeTradeApi is only available on Linux. "
+                "dstar_trade_py can be imported on this platform for documentation "
+                "and pure-Python helpers, but the vendor trade API cannot run here."
+            ) from _native_import_error
+
+from .config import PACKAGE_LOGGER_NAME
 from .enums import Direction, Hedge, Offset, OrderType, RealTimeDataFilter, RunMode, ValidType
 from .errors import (
     DstarErrorCode,
@@ -53,9 +75,16 @@ from .fields import (
     DstarApiTradeRightDelField,
     DstarApiTradeRightField,
 )
+from .order_management import (
+    DEFAULT_ORDER_JOURNAL_PATH,
+    OrderJournal,
+    OrderStateManager,
+    RequestIdManager,
+)
 
 
 NativeApiFactory = Callable[[], NativeTradeApi]
+logger = logging.getLogger(f"{PACKAGE_LOGGER_NAME}.client")
 
 
 def _validate_int(name: str, value: int, *, minimum: int | None = None) -> int:
@@ -132,7 +161,8 @@ class OrderRequestBuilder:
         contract_no: str,
         order_qty: int,
         order_price: float,
-        client_req_id: int,
+        client_req_id: int | None = None,
+        client_order_id: str | None = None,
         seat_index: int = 0,
         min_qty: int = 1,
         reference: int = 0,
@@ -170,7 +200,8 @@ class OrderRequestBuilder:
         contract_index: int,
         contract_no: str,
         order_qty: int,
-        client_req_id: int,
+        client_req_id: int | None = None,
+        client_order_id: str | None = None,
         seat_index: int = 0,
         min_qty: int = 1,
         reference: int = 0,
@@ -353,6 +384,7 @@ class DstarTradeClient:
         run_mode: int = int(RunMode.FULL_LOAD),
         submit_info: DstarApiSubmitInfoField | Mapping[str, Any] | None = None,
         init_qry_info: DstarApiInitQryInfoField | Mapping[str, Any] | None = None,
+        journal_path: str | Path = DEFAULT_ORDER_JOURNAL_PATH,
         api_factory: NativeApiFactory = NativeTradeApi,
     ) -> None:
         """创建客户端并立即创建 native API 实例。
@@ -379,6 +411,9 @@ class DstarTradeClient:
         self.run_mode = run_mode
         self.submit_info = submit_info
         self.init_qry_info = init_qry_info
+        self.order_journal = OrderJournal(journal_path)
+        self.request_id_manager = RequestIdManager.from_journal(self.order_journal)
+        self.order_state_manager = OrderStateManager.from_journal(self.order_journal)
 
         # 生命周期状态由同步方法和回调共同维护。只有收到 api_ready 后才允许下单。
         self.created = True
@@ -424,9 +459,11 @@ class DstarTradeClient:
         if not self.front_ip or self.front_port is None:
             raise ValueError("front_ip and front_port are required before connect()")
 
+        logger.info("Configuring Dstar native API front address %s:%s", self.front_ip, self.front_port)
         api.register_callback(self)
         api.register_front_address(self.front_ip, self.front_port)
         if self.api_log_path:
+            logger.info("Configuring Dstar native API log path: %s", self.api_log_path)
             api.set_api_log_path(self.api_log_path)
         api.set_cpu_id(self.recv_notice_cpu_id, self.log_cpu_id)
         api.set_subscribe_start_id(self.subscribe_start_id)
@@ -491,6 +528,7 @@ class DstarTradeClient:
         )
 
         api.set_login_info(login_info.to_dict())
+        logger.info("Initializing Dstar native API for account %s", self.account_no)
         ret = api.init()
         raise_for_error(ret, "Init")
         with self._condition:
@@ -592,7 +630,8 @@ class DstarTradeClient:
         contract_no: str,
         order_qty: int,
         order_price: float,
-        client_req_id: int,
+        client_req_id: int | None = None,
+        client_order_id: str | None = None,
         seat_index: int = 0,
         min_qty: int = 1,
         reference: int = 0,
@@ -605,6 +644,7 @@ class DstarTradeClient:
         """
 
         self._ensure_ready("insert_order")
+        client_req_id = self._reserve_client_req_id(client_req_id)
         request = DstarApiReqOrderInsertField(
             Direct=_validate_enum("direct", direct, OrderRequestBuilder.DIRECTION_VALUES),
             Offset=_validate_enum("offset", offset, OrderRequestBuilder.OFFSET_VALUES),
@@ -622,7 +662,9 @@ class DstarTradeClient:
             Reference=_validate_reference(reference),
             UdpAuthCode=_validate_int("udp_auth_code", udp_auth_code, minimum=0),
         )
+        logical_id = self._register_client_order_id(client_order_id, client_req_id)
         ret = self._require_api().req_order_insert(request.to_dict())
+        self._record_order_submit("order_insert", logical_id, client_req_id, request, ret)
         raise_for_error(ret, "ReqOrderInsert")
         return ret
 
@@ -630,8 +672,18 @@ class DstarTradeClient:
         """提交限价报单，返回官方本地请求返回码。"""
 
         self._ensure_ready("insert_limit_order")
+        client_order_id = kwargs.pop("client_order_id", None)
+        kwargs["client_req_id"] = self._reserve_client_req_id(kwargs.get("client_req_id"))
         request = OrderRequestBuilder.limit_order(**kwargs)
+        logical_id = self._register_client_order_id(client_order_id, request.ClientReqId)
         ret = self._require_api().req_order_insert(request.to_dict())
+        self._record_order_submit(
+            "limit_order",
+            logical_id,
+            request.ClientReqId,
+            request,
+            ret,
+        )
         raise_for_error(ret, "ReqOrderInsert")
         return ret
 
@@ -639,8 +691,18 @@ class DstarTradeClient:
         """提交市价报单请求；是否支持由官方返回码和后续回报决定。"""
 
         self._ensure_ready("insert_market_order_if_supported")
+        client_order_id = kwargs.pop("client_order_id", None)
+        kwargs["client_req_id"] = self._reserve_client_req_id(kwargs.get("client_req_id"))
         request = OrderRequestBuilder.market_order_if_supported(**kwargs)
+        logical_id = self._register_client_order_id(client_order_id, request.ClientReqId)
         ret = self._require_api().req_order_insert(request.to_dict())
+        self._record_order_submit(
+            "market_order",
+            logical_id,
+            request.ClientReqId,
+            request,
+            ret,
+        )
         raise_for_error(ret, "ReqOrderInsert")
         return ret
 
@@ -648,7 +710,8 @@ class DstarTradeClient:
         self,
         *,
         account_index: int,
-        client_req_id: int,
+        client_req_id: int | None = None,
+        client_order_id: str | None = None,
         order_id: int,
         system_no: str = "",
         udp_auth_code: int = 0,
@@ -658,6 +721,7 @@ class DstarTradeClient:
         """提交撤单请求，返回官方本地请求返回码。"""
 
         self._ensure_ready("cancel_order")
+        client_req_id = self._reserve_client_req_id(client_req_id)
         request = CancelRequestBuilder.order_delete(
             account_index=account_index,
             client_req_id=client_req_id,
@@ -667,7 +731,9 @@ class DstarTradeClient:
             reference=reference,
             seat_index=seat_index,
         )
+        logical_id = self._register_client_order_id(client_order_id, client_req_id)
         ret = self._require_api().req_order_delete(request.to_dict())
+        self._record_cancel_submit("order_cancel", logical_id, client_req_id, request, ret)
         raise_for_error(ret, "ReqOrderDelete")
         return ret
 
@@ -675,8 +741,18 @@ class DstarTradeClient:
         """撤销报价请求；官方无独立 ReqOfferDelete，底层复用 ReqOrderDelete。"""
 
         self._ensure_ready("cancel_offer_if_supported")
+        client_order_id = kwargs.pop("client_order_id", None)
+        kwargs["client_req_id"] = self._reserve_client_req_id(kwargs.get("client_req_id"))
         request = CancelRequestBuilder.offer_delete_if_supported(**kwargs)
+        logical_id = self._register_client_order_id(client_order_id, request.ClientReqId)
         ret = self._require_api().req_order_delete(request.to_dict())
+        self._record_cancel_submit(
+            "offer_cancel",
+            logical_id,
+            request.ClientReqId,
+            request,
+            ret,
+        )
         raise_for_error(ret, "ReqOrderDelete")
         return ret
 
@@ -686,7 +762,8 @@ class DstarTradeClient:
         buy_offset: int,
         sell_offset: int,
         account_index: int,
-        client_req_id: int,
+        client_req_id: int | None = None,
+        client_order_id: str | None = None,
         contract_index: int,
         contract_no: str,
         order_qty: int,
@@ -700,6 +777,7 @@ class DstarTradeClient:
         """提交报价请求，返回官方本地请求返回码。"""
 
         self._ensure_ready("insert_offer")
+        client_req_id = self._reserve_client_req_id(client_req_id)
         request = OrderRequestBuilder.offer(
             buy_offset=buy_offset,
             sell_offset=sell_offset,
@@ -715,7 +793,9 @@ class DstarTradeClient:
             reference=reference,
             udp_auth_code=udp_auth_code,
         )
+        logical_id = self._register_client_order_id(client_order_id, client_req_id)
         ret = self._require_api().req_offer_insert(request.to_dict())
+        self._record_order_submit("offer_insert", logical_id, client_req_id, request, ret)
         raise_for_error(ret, "ReqOfferInsert")
         return ret
 
@@ -725,7 +805,8 @@ class DstarTradeClient:
         buy_offset: int,
         sell_offset: int,
         account_index: int,
-        client_req_id: int,
+        client_req_id: int | None = None,
+        client_order_id: str | None = None,
         contract_index: int,
         contract_no: str,
         buy_order_qty: int,
@@ -741,6 +822,7 @@ class DstarTradeClient:
         """提交新版报价请求，返回官方本地请求返回码。"""
 
         self._ensure_ready("insert_offer_new")
+        client_req_id = self._reserve_client_req_id(client_req_id)
         request = DstarApiReqOfferInsertNewField(
             BuyOffset=buy_offset,
             SellOffset=sell_offset,
@@ -758,7 +840,9 @@ class DstarTradeClient:
             UdpAuthCode=udp_auth_code,
             ReplaceId=replace_id,
         )
+        logical_id = self._register_client_order_id(client_order_id, client_req_id)
         ret = self._require_api().req_offer_insert_new(request.to_dict())
+        self._record_order_submit("offer_insert_new", logical_id, client_req_id, request, ret)
         raise_for_error(ret, "ReqOfferInsertNew")
         return ret
 
@@ -777,7 +861,8 @@ class DstarTradeClient:
         contract_no2: str,
         order_qty: int,
         order_price: float,
-        client_req_id: int,
+        client_req_id: int | None = None,
+        client_order_id: str | None = None,
         seat_index: int = 0,
         min_qty: int = 1,
         reference: int = 0,
@@ -786,6 +871,7 @@ class DstarTradeClient:
         """提交组合报单请求，返回官方本地请求返回码。"""
 
         self._ensure_ready("insert_cmb_order")
+        client_req_id = self._reserve_client_req_id(client_req_id)
         request = OrderRequestBuilder.combo_order(
             direct=direct,
             offset=offset,
@@ -805,7 +891,9 @@ class DstarTradeClient:
             reference=reference,
             udp_auth_code=udp_auth_code,
         )
+        logical_id = self._register_client_order_id(client_order_id, client_req_id)
         ret = self._require_api().req_cmb_order_insert(request.to_dict())
+        self._record_order_submit("combo_order", logical_id, client_req_id, request, ret)
         raise_for_error(ret, "ReqCmbOrderInsert")
         return ret
 
@@ -954,6 +1042,7 @@ class DstarTradeClient:
             self.logged_in = data.ErrorCode == int(DstarErrorCode.SUCCESS)
             return
         if event_name == "api_ready":
+            logger.info("Dstar native API is ready")
             self.api_ready = True
             self.connected = True
             self.disconnected = False
@@ -992,6 +1081,91 @@ class DstarTradeClient:
         elif event_name == "rsp_last_req_id" and isinstance(data, DstaApiRspLastReqIdField):
             self._latest_last_req_id = data
             self._last_req_id_generation += 1
+            self.request_id_manager.update_from_remote(data.LastClientReqId)
+
+        if event_name in {"rsp_order_insert", "rsp_order_delete", "rsp_offer_insert"} and isinstance(
+            data,
+            DstarApiRspOrderInsertField,
+        ):
+            self.order_state_manager.on_rsp_order_insert(data)
+            self.order_journal.append(event_name, payload=data)
+        elif event_name == "rtn_order" and isinstance(data, DstarApiOrderField):
+            self.order_state_manager.on_rtn_order(data)
+            self.order_journal.append(event_name, payload=data)
+        elif event_name == "rtn_match" and isinstance(data, DstarApiMatchField):
+            self.order_state_manager.on_rtn_match(data)
+            self.order_journal.append(event_name, payload=data)
+        elif event_name == "rtn_offer" and isinstance(data, DstarApiOfferField):
+            self.order_journal.append(event_name, payload=data)
+
+    def _reserve_client_req_id(self, client_req_id: int | None) -> int:
+        """分配或预留客户请求号，避免重复使用。"""
+
+        if client_req_id is None:
+            return self.request_id_manager.next_id()
+        return self.request_id_manager.reserve(client_req_id)
+
+    def _register_client_order_id(self, client_order_id: str | None, client_req_id: int) -> str:
+        """生成并注册幂等业务订单号，必须在发送 native 请求前调用。"""
+
+        if client_order_id:
+            logical_id = client_order_id
+        else:
+            logical_id = f"auto-{client_req_id}-{uuid.uuid4().hex[:12]}"
+        self.order_state_manager.register_submission(logical_id, client_req_id)
+        return logical_id
+
+    def _record_order_submit(
+        self,
+        request_type: str,
+        client_order_id: str,
+        client_req_id: int,
+        request: Any,
+        return_code: int,
+    ) -> None:
+        """记录下单类请求。"""
+
+        self.order_journal.append(
+            "order_submit",
+            request_type=request_type,
+            client_order_id=client_order_id,
+            client_req_id=client_req_id,
+            return_code=return_code,
+            payload=request,
+        )
+        logger.info(
+            "Recorded %s request client_order_id=%s client_req_id=%s return_code=%s",
+            request_type,
+            client_order_id,
+            client_req_id,
+            return_code,
+        )
+
+    def _record_cancel_submit(
+        self,
+        request_type: str,
+        client_order_id: str,
+        client_req_id: int,
+        request: Any,
+        return_code: int,
+    ) -> None:
+        """记录撤单类请求。"""
+
+        self.order_journal.append(
+            "order_cancel",
+            request_type=request_type,
+            client_order_id=client_order_id,
+            client_req_id=client_req_id,
+            return_code=return_code,
+            payload=request,
+        )
+        logger.info(
+            "Recorded %s request client_order_id=%s client_req_id=%s return_code=%s",
+            request_type,
+            client_order_id,
+            client_req_id,
+            return_code,
+        )
 
     def _ensure_ready(self, action: str) -> None:
         """所有真实请求前统一检查 API 就绪状态。"""

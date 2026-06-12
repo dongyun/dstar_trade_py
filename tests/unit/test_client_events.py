@@ -95,13 +95,14 @@ class QueryFakeNativeTradeApi:
         self.dispatcher.on_event(event_name, payload)
 
 
-def make_ready_client() -> tuple[DstarTradeClient, QueryFakeNativeTradeApi]:
+def make_ready_client(tmp_path) -> tuple[DstarTradeClient, QueryFakeNativeTradeApi]:
     """Create a connected and ready client backed by the query fake."""
 
     fake = QueryFakeNativeTradeApi()
     client = DstarTradeClient(
         front_ip="127.0.0.1",
         front_port=12345,
+        journal_path=tmp_path / "order_journal.jsonl",
         api_factory=lambda: fake,
     )
     client.connect()
@@ -109,10 +110,10 @@ def make_ready_client() -> tuple[DstarTradeClient, QueryFakeNativeTradeApi]:
     return client, fake
 
 
-def test_query_fund_waits_for_response_and_routes_event() -> None:
+def test_query_fund_waits_for_response_and_routes_event(tmp_path) -> None:
     """query_fund should return a dataclass and push the same type to fund_events."""
 
-    client, _ = make_ready_client()
+    client, _ = make_ready_client(tmp_path)
 
     fund = client.query_fund(timeout=0.01)
     queued_fund = client.fund_events.get_nowait()
@@ -123,10 +124,10 @@ def test_query_fund_waits_for_response_and_routes_event() -> None:
     assert queued_fund == fund
 
 
-def test_query_position_collects_until_last_response() -> None:
+def test_query_position_collects_until_last_response(tmp_path) -> None:
     """query_position should collect positions until the last flag is received."""
 
-    client, _ = make_ready_client()
+    client, _ = make_ready_client(tmp_path)
 
     positions = client.query_position(timeout=0.01)
     queued_position = client.position_events.get_nowait()
@@ -136,28 +137,29 @@ def test_query_position_collects_until_last_response() -> None:
     assert queued_position == positions[0]
 
 
-def test_query_position_timeout() -> None:
+def test_query_position_timeout(tmp_path) -> None:
     """Missing last response should surface as DstarTimeoutError."""
 
-    client, fake = make_ready_client()
+    client, fake = make_ready_client(tmp_path)
     fake.emit_position = False
 
     with pytest.raises(DstarTimeoutError, match="query_position"):
         client.query_position(timeout=0.01)
 
 
-def test_query_last_client_req_id_waits_for_callback() -> None:
+def test_query_last_client_req_id_waits_for_callback(tmp_path) -> None:
     """query_last_client_req_id should return the callback's LastClientReqId."""
 
-    client, _ = make_ready_client()
+    client, _ = make_ready_client(tmp_path)
 
     assert client.query_last_client_req_id(timeout=0.01) == 1234
+    assert client.request_id_manager.current == 1234
 
 
-def test_raw_order_and_trade_events_are_converted_and_queued() -> None:
+def test_raw_order_and_trade_events_are_converted_and_queued(tmp_path) -> None:
     """Dispatcher should convert raw dict payloads into generated dataclasses."""
 
-    client, fake = make_ready_client()
+    client, fake = make_ready_client(tmp_path)
 
     fake.emit(
         "rtn_order",

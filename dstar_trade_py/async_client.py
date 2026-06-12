@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any, Mapping
 
 from .client import DstarClientEvent, DstarTradeClient, NativeApiFactory
@@ -17,6 +18,7 @@ from .fields import (
     DstarApiReqLoginField,
     DstarApiSubmitInfoField,
 )
+from .order_management import DEFAULT_ORDER_JOURNAL_PATH
 
 
 _QUEUE_SENTINEL = object()
@@ -48,6 +50,7 @@ class AsyncDstarTradeClient(DstarTradeClient):
         run_mode: int = int(RunMode.FULL_LOAD),
         submit_info: DstarApiSubmitInfoField | Mapping[str, Any] | None = None,
         init_qry_info: DstarApiInitQryInfoField | Mapping[str, Any] | None = None,
+        journal_path: str | Path = DEFAULT_ORDER_JOURNAL_PATH,
         api_factory: NativeApiFactory | None = None,
     ) -> None:
         """创建 async 客户端。
@@ -71,6 +74,7 @@ class AsyncDstarTradeClient(DstarTradeClient):
             "run_mode": run_mode,
             "submit_info": submit_info,
             "init_qry_info": init_qry_info,
+            "journal_path": journal_path,
         }
         if api_factory is not None:
             kwargs["api_factory"] = api_factory

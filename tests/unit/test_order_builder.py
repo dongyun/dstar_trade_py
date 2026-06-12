@@ -41,11 +41,14 @@ class RecordingNativeApi:
         return 0
 
 
-def make_ready_client() -> tuple[DstarTradeClient, RecordingNativeApi]:
+def make_ready_client(tmp_path) -> tuple[DstarTradeClient, RecordingNativeApi]:
     """Create a client with api_ready=True and a fake native API."""
 
     native = RecordingNativeApi()
-    client = DstarTradeClient(api_factory=lambda: native)
+    client = DstarTradeClient(
+        api_factory=lambda: native,
+        journal_path=tmp_path / "order_journal.jsonl",
+    )
     client.api_ready = True
     return client, native
 
@@ -169,10 +172,10 @@ def test_limit_order_builder_validates_inputs(kwargs: dict[str, object], message
         OrderRequestBuilder.limit_order(**params)
 
 
-def test_client_order_methods_use_builders_and_return_local_codes() -> None:
+def test_client_order_methods_use_builders_and_return_local_codes(tmp_path) -> None:
     """High-level order methods should submit validated dicts and return only local codes."""
 
-    client, native = make_ready_client()
+    client, native = make_ready_client(tmp_path)
 
     order_ret = client.insert_limit_order(
         direct=int(Direction.BUY),
@@ -226,10 +229,35 @@ def test_client_order_methods_use_builders_and_return_local_codes() -> None:
     assert client.trade_events.empty()
 
 
-def test_client_rejects_order_methods_before_api_ready() -> None:
+def test_client_rejects_duplicate_client_order_id(tmp_path) -> None:
+    """A logical client_order_id may only be submitted once for idempotency."""
+
+    client, _ = make_ready_client(tmp_path)
+    params = {
+        "direct": int(Direction.BUY),
+        "offset": int(Offset.OPEN),
+        "hedge": int(Hedge.SPECULATE),
+        "valid_type": int(ValidType.GFD),
+        "account_index": 1,
+        "contract_index": 2,
+        "contract_no": "GC2608",
+        "order_qty": 1,
+        "order_price": 2400.5,
+        "client_order_id": "biz-duplicate",
+    }
+
+    assert client.insert_limit_order(client_req_id=100, **params) == 0
+    with pytest.raises(ValueError, match="duplicate client_order_id"):
+        client.insert_limit_order(client_req_id=101, **params)
+
+
+def test_client_rejects_order_methods_before_api_ready(tmp_path) -> None:
     """Order methods must not submit before api_ready."""
 
-    client = DstarTradeClient(api_factory=RecordingNativeApi)
+    client = DstarTradeClient(
+        api_factory=RecordingNativeApi,
+        journal_path=tmp_path / "order_journal.jsonl",
+    )
 
     with pytest.raises(DstarRequestError, match="insert_limit_order failed"):
         client.insert_limit_order(

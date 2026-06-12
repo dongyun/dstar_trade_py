@@ -11,92 +11,52 @@ import os
 import queue
 import sys
 import time
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import asdict, is_dataclass
 from pprint import pprint
 from typing import Any, Iterable
 
 from dstar_trade_py import DstarClientEvent, DstarTradeClient
+from dstar_trade_py.config import DstarTradeConfig, REQUIRED_TRADE_ENV_VARS, load_config_from_env
 from dstar_trade_py.enums import Direction, Hedge, Offset, OrderType, ValidType
 from dstar_trade_py.errors import raise_for_error
 from dstar_trade_py.fields import DstarApiRspLoginField
 
 
-REQUIRED_ENV_VARS = (
-    "DSTAR_TRADE_IP",
-    "DSTAR_TRADE_PORT",
-    "DSTAR_TRADE_USER",
-    "DSTAR_TRADE_PASSWORD",
-    "DSTAR_TRADE_AUTH_CODE",
-    "DSTAR_TRADE_APP_ID",
-    "DSTAR_TRADE_LOG_PATH",
-)
-
-
-@dataclass(slots=True)
-class LiveTradeConfig:
-    """真实测试环境配置，全部来自环境变量。"""
-
-    trade_ip: str
-    trade_port: int
-    user: str
-    password: str
-    auth_code: str
-    app_id: str
-    log_path: str
+REQUIRED_ENV_VARS = (*REQUIRED_TRADE_ENV_VARS, "DSTAR_TRADE_LOG_PATH")
+LiveTradeConfig = DstarTradeConfig
 
 
 def load_config() -> LiveTradeConfig:
     """读取并校验真实测试环境变量。"""
 
-    missing = [name for name in REQUIRED_ENV_VARS if not os.environ.get(name)]
-    if missing:
-        joined = ", ".join(missing)
+    if not os.environ.get("DSTAR_TRADE_LOG_PATH"):
         raise RuntimeError(
-            "Missing required Dstar live-test environment variables: "
-            f"{joined}. See docs/live_testing.md for setup instructions."
+            "Missing required Dstar live-test environment variable: "
+            "DSTAR_TRADE_LOG_PATH. See docs/live_testing.md for setup instructions."
         )
-
-    try:
-        trade_port = int(os.environ["DSTAR_TRADE_PORT"])
-    except ValueError as exc:
-        raise RuntimeError("DSTAR_TRADE_PORT must be an integer, for example 6668") from exc
-
-    return LiveTradeConfig(
-        trade_ip=os.environ["DSTAR_TRADE_IP"],
-        trade_port=trade_port,
-        user=os.environ["DSTAR_TRADE_USER"],
-        password=os.environ["DSTAR_TRADE_PASSWORD"],
-        auth_code=os.environ["DSTAR_TRADE_AUTH_CODE"],
-        app_id=os.environ["DSTAR_TRADE_APP_ID"],
-        log_path=os.environ["DSTAR_TRADE_LOG_PATH"],
-    )
+    config = load_config_from_env(require_credentials=True)
+    return config
 
 
 def print_config_summary(config: LiveTradeConfig) -> None:
-    """打印非敏感配置摘要，密码只显示是否已提供。"""
+    """打印非敏感配置摘要，敏感字段统一脱敏。"""
 
+    redacted = config.to_redacted_dict()
     print("Dstar live-test configuration:")
-    print(f"  trade_ip: {config.trade_ip}")
-    print(f"  trade_port: {config.trade_port}")
-    print(f"  user: {config.user}")
-    print("  password: <set>")
-    print(f"  auth_code: {config.auth_code}")
-    print(f"  app_id: {config.app_id}")
-    print(f"  log_path: {config.log_path}")
+    print(f"  trade_ip: {redacted['trade_ip']}")
+    print(f"  trade_port: {redacted['trade_port']}")
+    print(f"  user: {redacted['user']}")
+    print(f"  password: {redacted['password']}")
+    print(f"  auth_code: {redacted['auth_code']}")
+    print(f"  app_id: {redacted['app_id']}")
+    print(f"  log_path: {redacted['log_path']}")
 
 
 def make_client(config: LiveTradeConfig) -> DstarTradeClient:
     """用真实测试配置创建同步高层客户端。"""
 
-    return DstarTradeClient(
-        front_ip=config.trade_ip,
-        front_port=config.trade_port,
-        account_no=config.user,
-        password=config.password,
-        app_id=config.app_id,
-        license_no=config.auth_code,
-        api_log_path=config.log_path,
-    )
+    config.ensure_native_log_path()
+    return DstarTradeClient(**config.to_client_kwargs())
 
 
 def connect_login_ready(timeout: float = 30) -> DstarTradeClient:

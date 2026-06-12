@@ -29,6 +29,9 @@ export LD_LIBRARY_PATH="$PWD/third_party/dstar/lib/linux:${LD_LIBRARY_PATH:-}"
 ./scripts/check_env.sh
 ```
 
+For a fuller Linux setup checklist, including `python3-dev`, `dmidecode`, `lshw`, and
+system-info collection permissions, see [`docs/linux_setup.md`](docs/linux_setup.md).
+
 ## Editable Build
 
 Create a virtual environment and install the project with its test dependency:
@@ -85,3 +88,5 @@ If the dynamic loader cannot find the vendor library, package import raises an e
 ## Documentation
 
 The initial vendor SDK analysis is available in [`docs/sdk_analysis.md`](docs/sdk_analysis.md).
+Security guidance for credentials, live-order confirmation, journal redaction, and
+log redaction is available in [`docs/security.md`](docs/security.md).

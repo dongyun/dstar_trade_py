@@ -62,7 +62,7 @@ class FakeNativeTradeApi:
         self.dispatcher.on_event(event_name, payload)
 
 
-def make_client() -> tuple[DstarTradeClient, FakeNativeTradeApi]:
+def make_client(tmp_path) -> tuple[DstarTradeClient, FakeNativeTradeApi]:
     """Create a client backed by a single fake native instance."""
 
     fake = FakeNativeTradeApi()
@@ -73,15 +73,16 @@ def make_client() -> tuple[DstarTradeClient, FakeNativeTradeApi]:
         password="demo-password",
         app_id="demo-app",
         license_no="demo-license",
+        journal_path=tmp_path / "order_journal.jsonl",
         api_factory=lambda: fake,
     )
     return client, fake
 
 
-def test_client_connect_and_login_update_basic_state() -> None:
+def test_client_connect_and_login_update_basic_state(tmp_path) -> None:
     """connect configures native API; login calls Init but waits for callbacks for state."""
 
-    client, fake = make_client()
+    client, fake = make_client(tmp_path)
 
     assert client.created is True
     assert client.connected is False
@@ -114,10 +115,10 @@ def test_client_connect_and_login_update_basic_state() -> None:
     assert client.logged_in is True
 
 
-def test_wait_ready_and_disconnected_state() -> None:
+def test_wait_ready_and_disconnected_state(tmp_path) -> None:
     """api_ready and front_disconnected callbacks should drive lifecycle flags."""
 
-    client, fake = make_client()
+    client, fake = make_client(tmp_path)
 
     client.connect()
     fake.emit("api_ready", {"serial_id": 99})
@@ -133,10 +134,10 @@ def test_wait_ready_and_disconnected_state() -> None:
     assert client.api_ready is False
 
 
-def test_insert_order_requires_api_ready() -> None:
+def test_insert_order_requires_api_ready(tmp_path) -> None:
     """下单前必须收到 api_ready，防止在未就绪状态提交真实交易请求。"""
 
-    client, _ = make_client()
+    client, _ = make_client(tmp_path)
 
     with pytest.raises(DstarRequestError, match="insert_order failed"):
         client.insert_order(
@@ -154,10 +155,10 @@ def test_insert_order_requires_api_ready() -> None:
         )
 
 
-def test_insert_order_returns_local_request_code_after_ready() -> None:
+def test_insert_order_returns_local_request_code_after_ready(tmp_path) -> None:
     """insert_order returns the native request code and stores no fake trade result."""
 
-    client, fake = make_client()
+    client, fake = make_client(tmp_path)
 
     client.connect()
     fake.emit("api_ready", {"serial_id": 99})
@@ -181,10 +182,10 @@ def test_insert_order_returns_local_request_code_after_ready() -> None:
     assert client.trade_events.empty()
 
 
-def test_close_releases_client_state() -> None:
+def test_close_releases_client_state(tmp_path) -> None:
     """close drops the native reference and marks the client disconnected."""
 
-    client, _ = make_client()
+    client, _ = make_client(tmp_path)
 
     client.connect()
     client.close()

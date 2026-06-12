@@ -48,6 +48,7 @@ CI secret 或临时 shell export。
 ```
 
 如果登录失败，先检查账号、密码、`APPID`、`AuthCode`、IP、端口和本机网络连通性。
+账号、密码、AuthCode、APPID、journal 和日志脱敏要求见 [`security.md`](security.md)。
 如果 `wait_ready` 超时，不要继续运行下单或撤单 demo。
 
 ## 下单 Dry Run
