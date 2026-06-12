@@ -91,6 +91,16 @@ export DSTAR_TRADE_LOG_PATH=/tmp/dstar_trade_py/native_logs
 `DstarTradeConfig.ensure_native_log_path()` 会创建该目录。目录权限应限制为当前用户可读写，
 不要放在会被提交到 Git 的路径下。
 
+Python 示例：
+
+```python
+from dstar_trade_py import DstarTradeConfig
+
+config = DstarTradeConfig.from_env(require_credentials=True)
+native_log_path = config.ensure_native_log_path()
+print("[示例格式] native log path:", native_log_path)
+```
+
 ## 系统信息采集权限
 
 官方 `GetSystemInfo` 通常会采集机器授权相关信息，可能依赖硬件序列号、DMI、网卡或其他

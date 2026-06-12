@@ -8,6 +8,36 @@
 `AsyncDstarTradeClient` 也为所有适合高层调用的能力提供了代理。`CreateDstarTradeApi` 和
 `FreeDstarTradeApi` 不直接暴露裸指针给 Python，高层通过构造、`close()` 和 RAII 间接覆盖。
 
+## 使用示例
+
+下面示例展示主动接口在三层中的调用方式，不连接真实服务器：
+
+```python
+import dstar_trade_py
+from dstar_trade_py import DstarTradeClient, NativeTradeApi
+
+# 模块级工厂检查：CreateDstarTradeApi + FreeDstarTradeApi
+print(dstar_trade_py.create_and_free_api())
+
+# native 层：直接读取版本
+native = NativeTradeApi()
+print(native.get_api_version())
+
+# high-level 层：生产代码优先使用 client 管理生命周期
+client = DstarTradeClient(
+    front_ip="61.163.243.173",
+    front_port=6668,
+    account_no="你的账号",
+    password="你的密码",
+    app_id="你的APPID",
+    license_no="你的AuthCode",
+)
+print("[示例格式] client created:", client.created)
+client.close()
+```
+
+上述示例中的账号字段是占位符，不会产生真实登录或交易。
+
 | C++ 接口名 | native binding 是否覆盖 | Python client 是否覆盖 | 测试是否覆盖 | demo 是否覆盖 | 备注 |
 |---|---|---|---|---|---|
 | `RegisterSpi` | 是：`NativeTradeApi.register_callback()` | 是：`connect()` 自动注册 client dispatcher | 是：`test_native_api_methods.py`、`test_callback_dispatch.py`、`test_api_coverage.py` | 是：所有 live demo 通过 `connect_login_ready()` 或 `connect()` 间接使用 | 高层不暴露 SPI 指针，只注册 Python `on_event` dispatcher。 |

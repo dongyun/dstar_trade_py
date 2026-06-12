@@ -143,16 +143,40 @@ ret = client.cancel_order(
 
 ## 避免重复下单
 
-建议调用方在业务层维护以下幂等信息：
+高层 client 已内置基础幂等保护：
 
-- `client_req_id`
+- `client_req_id` 不允许重复使用。
+- `client_order_id` 不允许重复提交。
+- 默认 journal 写入 `logs/order_journal.jsonl`，重启后恢复近期请求号和业务订单号。
+
+生产系统仍应在业务层维护更完整的幂等信息：
+
+- 本地业务订单号 `client_order_id`
 - 合约编号和合约索引
 - 买卖方向、开平、投保
 - 价格和数量
-- 本地业务流水号
+- 策略 ID / 用户 ID / 风控批次号
 
-下单前先检查同一个业务流水号是否已经提交过。`ReqOrderInsert` 返回网络错误或超时时，不要
-盲目重发；应优先查询最新请求号、监听委托回报，确认上一笔请求是否已被柜台处理。
+示例：
+
+```python
+ret = client.insert_limit_order(
+    direct=int(Direction.BUY),
+    offset=int(Offset.OPEN),
+    hedge=int(Hedge.SPECULATE),
+    valid_type=int(ValidType.GFD),
+    account_index=1,
+    contract_index=12345,
+    contract_no="rb2410",
+    order_qty=1,
+    order_price=3000.0,
+    client_order_id="strategy-a-20260612-000001",
+)
+```
+
+如果同一个 `client_order_id` 再次提交，client 会在进入 native API 前抛出 `ValueError`。
+`ReqOrderInsert` 返回网络错误或超时时，不要盲目重发；应优先查询最新请求号、监听委托回报，
+确认上一笔请求是否已被柜台处理。
 
 ## 请求号管理
 
@@ -163,8 +187,40 @@ last_id = client.query_last_client_req_id(timeout=5)
 next_id = last_id + 1
 ```
 
+高层 client 内部有 `RequestIdManager`。不传 `client_req_id` 时会自动本地递增：
+
+```python
+ret = client.insert_limit_order(
+    direct=int(Direction.BUY),
+    offset=int(Offset.OPEN),
+    hedge=int(Hedge.SPECULATE),
+    valid_type=int(ValidType.GFD),
+    account_index=1,
+    contract_index=12345,
+    contract_no="rb2410",
+    order_qty=1,
+    order_price=3000.0,
+    client_order_id="strategy-a-20260612-000002",
+)
+```
+
 官方文档说明查询最新请求号可用于检测报撤单丢包情况，但有频率限制。不要每次循环高频调用；
-通常应在本地维护递增请求号，并在登录后或异常恢复时查询一次进行校准。
+通常应在登录后或异常恢复时查询一次进行校准，之后由本地递增管理。
+
+## 本地订单状态
+
+高层 client 暴露 `order_state_manager`：
+
+```python
+state = client.order_state_manager.get("strategy-a-20260612-000001")
+if state is not None:
+    print("[示例格式] status:", state.status)
+    print("[示例格式] order_id:", state.order_id)
+    print("[示例格式] matched:", state.total_match_qty)
+```
+
+状态含义见 [`order_state_machine.md`](order_state_machine.md)。注意这些状态来自本地请求和回调整理，
+最终仍以柜台/交易所回报为准。
 
 ## Demo 安全
 

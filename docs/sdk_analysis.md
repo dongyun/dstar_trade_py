@@ -14,6 +14,42 @@
 
 本项目应做成 Linux x86-64 only。不能用 `ctypes` 直接调用 C++ 虚类；应使用 pybind11 编译一个 C++ 扩展，由 C++ 负责实现 SPI、管理厂商对象生命周期、复制回调结构体并安全地转交 Python。
 
+## 最小使用示例
+
+本分析文档面向封装设计。实际 Python SDK 的最小本地加载示例如下，不连接真实交易服务器：
+
+```python
+import dstar_trade_py as dstar
+
+print(dstar.get_api_version())
+print(dstar.create_and_free_api())
+```
+
+同步 client 示例格式：
+
+```python
+from dstar_trade_py import DstarTradeClient
+
+client = DstarTradeClient(
+    front_ip="61.163.243.173",
+    front_port=6668,
+    account_no="你的账号",
+    password="你的密码",
+    app_id="你的APPID",
+    license_no="你的AuthCode",
+)
+
+try:
+    client.connect()
+    client.login()
+    client.wait_ready(timeout=30)
+    print("[示例格式] api_ready:", client.api_ready)
+finally:
+    client.close()
+```
+
+示例中的账号和输出均为格式说明，不代表真实登录或交易结果。
+
 ## 2. 官方包结构
 
 ```text

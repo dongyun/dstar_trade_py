@@ -7,11 +7,45 @@
 ```python
 from dstar_trade_py import raise_for_error
 
-result = native_api.ReqOrderInsert(request)
+result = native_api.req_order_insert(request.to_dict())
 raise_for_error(result, action="ReqOrderInsert")
 ```
 
 `code == 0` 时函数直接返回。非零时异常对象保留 `code`、`message` 和 `action`。未知错误不会丢失原始整数，其消息固定为 `Unknown Dstar error`。
+
+完整捕获示例：
+
+```python
+from dstar_trade_py import (
+    DstarAuthError,
+    DstarConnectionError,
+    DstarRequestError,
+    get_error_message,
+    raise_for_error,
+)
+
+ret = -1  # 示例格式：真实值来自官方 API 返回
+
+try:
+    raise_for_error(ret, action="ReqQryFund")
+except DstarAuthError as exc:
+    print("[示例格式] auth error:", exc.code, exc.message)
+except DstarConnectionError as exc:
+    print("[示例格式] connection error:", exc.code, exc.message)
+except DstarRequestError as exc:
+    print("[示例格式] request error:", exc.code, exc.message)
+
+print(get_error_message(20003))
+```
+
+示例输出格式：
+
+```text
+[示例格式] request error: -1 API is not ready
+[示例格式] Incorrect password
+```
+
+上述 `ret = -1` 只是异常处理示例，不代表真实交易请求结果。
 
 异常层次：
 

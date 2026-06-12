@@ -47,6 +47,20 @@ CI secret 或临时 shell export。
 .venv/bin/python examples/05_subscribe_order_trade_events.py --duration 120
 ```
 
+示例输出格式，字段和值以真实环境实际返回为准：
+
+```text
+[示例格式] Dstar live-test configuration:
+[示例格式]   trade_ip: 61.163.243.173
+[示例格式]   user: demo-user
+[示例格式]   password: <redacted>
+[示例格式] API ready.
+[示例格式] Fund:
+[示例格式] {'AccountNo': 'demo-user', 'Equity': 100000.0, ...}
+```
+
+上述输出只是格式示例，不代表真实账号资金、持仓或交易结果。
+
 如果登录失败，先检查账号、密码、`APPID`、`AuthCode`、IP、端口和本机网络连通性。
 账号、密码、AuthCode、APPID、journal 和日志脱敏要求见 [`security.md`](security.md)。
 如果 `wait_ready` 超时，不要继续运行下单或撤单 demo。

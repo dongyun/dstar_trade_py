@@ -4,6 +4,36 @@
 journal。这里的状态只用于 Python SDK 本地保护和事件整理，订单最终结果必须以后续柜台
 或交易所回报为准。
 
+## 最小示例
+
+下面示例演示本地请求号和订单状态管理，不连接真实交易服务器：
+
+```python
+from dstar_trade_py import OrderJournal, OrderStateManager, RequestIdManager
+from dstar_trade_py.fields import DstarApiRspOrderInsertField
+
+journal = OrderJournal("logs/order_journal.jsonl")
+request_ids = RequestIdManager.from_journal(journal)
+states = OrderStateManager.from_journal(journal)
+
+client_req_id = request_ids.next_id()
+states.register_submission("strategy-a-000001", client_req_id)
+
+# 示例格式：真实 response 来自 OnRspOrderInsert 回调。
+state = states.on_rsp_order_insert(
+    DstarApiRspOrderInsertField(ClientReqId=client_req_id, OrderId=10001, ErrCode=0)
+)
+print("[示例格式]", state.status, state.order_id)
+```
+
+示例输出格式：
+
+```text
+[示例格式] accepted_by_api 10001
+```
+
+这只是本地状态机演示，不代表真实委托已成交或最终成功。
+
 ## 请求号管理
 
 `RequestIdManager` 负责分配和保护 `ClientReqId`。

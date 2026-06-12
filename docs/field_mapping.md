@@ -4,6 +4,42 @@
 
 C++ 结构体使用 `#pragma pack(push, 1)`；Python dataclass 是业务值对象，不复制 packed ABI。匿名 union 的成员在 Python 中各自保留为独立字段，转换到 C++ 时 binding 层必须按业务语义选择有效成员。
 
+## 使用示例
+
+所有 Python 结构体都继承 `DstarField`，支持 `from_dict()` 和 `to_dict()`：
+
+```python
+from dstar_trade_py.fields import DstarApiOrderField
+from dstar_trade_py.enums import Direction, Offset, Hedge, OrderType, OrderState
+
+order = DstarApiOrderField.from_dict(
+    {
+        "Direct": int(Direction.BUY),
+        "Offset": int(Offset.OPEN),
+        "Hedge": int(Hedge.SPECULATE),
+        "OrderType": int(OrderType.LIMIT),
+        "OrderState": int(OrderState.QUEUE),
+        "OrderId": 10001,
+        "ContractNo1": "rb2410",
+        "OrderQty": 1,
+        "MatchQty": 0,
+    }
+)
+
+print(order.ContractNo1)
+print(order.to_dict())
+```
+
+示例输出格式，非真实交易结果：
+
+```text
+[示例格式] rb2410
+[示例格式] {'Direct': 66, 'Offset': 79, ...}
+```
+
+固定 `char[N]` 字段在 Python 中统一为 `str`。单字符枚举在 C++ 中是 `char`，Python 中保留为
+`int`，例如 `Direction.BUY == ord("B")`。
+
 ## Typedef 映射
 
 共 73 个 typedef。

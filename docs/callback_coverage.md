@@ -9,6 +9,46 @@
 和未知异常，异常不会穿透回易盛 C++ SDK。所有官方结构体指针都会在回调栈内立即转换为
 Python-owned `dict`，不会把裸指针交给 Python 保存。
 
+## 使用示例
+
+下面示例只演示回调事件格式，不连接真实交易服务器：
+
+```python
+from dstar_trade_py import DstarTradeClient
+
+client = DstarTradeClient(
+    front_ip="61.163.243.173",
+    front_port=6668,
+    account_no="你的账号",
+    password="你的密码",
+    app_id="你的APPID",
+    license_no="你的AuthCode",
+)
+
+try:
+    client.connect()
+    client.login()
+    client.wait_ready(timeout=30)
+
+    # 示例格式：实际事件来自官方 SDK 回调，不要伪造为真实交易结果。
+    event = client.raw_events.get(timeout=5)
+    print("[示例格式] event:", event.name)
+    print("[示例格式] payload:", event.payload)
+finally:
+    client.close()
+```
+
+如果只关心委托和成交：
+
+```python
+order_event = client.order_events.get(timeout=5)
+trade_event = client.trade_events.get(timeout=5)
+print("[示例格式] order:", order_event)
+print("[示例格式] trade:", trade_event)
+```
+
+以上输出是格式示例，真实字段和值必须以后续 SDK 回调为准。
+
 | C++ 回调名 | Python event_name | payload 类型 | 是否转换结构体 | 是否有单元测试 | 是否有 demo 使用 |
 |---|---|---|---|---|---|
 | `OnFrontDisconnected` | `front_disconnected` | `{}` | 否 | 是：`test_callback_dispatch.py`、`test_callback_coverage.py` | 无专用 demo；所有 client 都会处理断线状态 |
