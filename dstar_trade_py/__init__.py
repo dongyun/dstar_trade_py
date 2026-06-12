@@ -15,11 +15,32 @@ except ImportError as exc:
         "dstar_trade_py/.libs (or available through LD_LIBRARY_PATH)."
     ) from exc
 
+from .errors import (
+    DstarAuthError,
+    DstarConnectionError,
+    DstarError,
+    DstarErrorCode,
+    DstarNativeError,
+    DstarRequestError,
+    DstarTimeoutError,
+    get_error_message,
+    raise_for_error,
+)
+
 __all__ = [
     "IS_LINUX_BUILD",
     "SDK_PROTOCOL_VERSION",
+    "DstarAuthError",
+    "DstarConnectionError",
+    "DstarError",
+    "DstarErrorCode",
+    "DstarNativeError",
+    "DstarRequestError",
+    "DstarTimeoutError",
     "create_and_free_api",
     "get_api_version",
+    "get_error_message",
+    "raise_for_error",
     "__version__",
 ]
 
