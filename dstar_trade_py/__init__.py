@@ -30,9 +30,11 @@ from .errors import (
 from .enums import ENUM_BY_CPP_TYPE
 from .fields import STRUCT_MODELS, DstarField
 from .client import DstarClientEvent, DstarTradeClient
+from .async_client import AsyncDstarTradeClient
 
 __all__ = [
     "IS_LINUX_BUILD",
+    "AsyncDstarTradeClient",
     "DstarClientEvent",
     "DstarTradeClient",
     "NativeTradeApi",
