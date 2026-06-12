@@ -26,6 +26,8 @@ from .errors import (
     get_error_message,
     raise_for_error,
 )
+from .enums import ENUM_BY_CPP_TYPE
+from .fields import STRUCT_MODELS, DstarField
 
 __all__ = [
     "IS_LINUX_BUILD",
@@ -37,6 +39,9 @@ __all__ = [
     "DstarNativeError",
     "DstarRequestError",
     "DstarTimeoutError",
+    "DstarField",
+    "ENUM_BY_CPP_TYPE",
+    "STRUCT_MODELS",
     "create_and_free_api",
     "get_api_version",
     "get_error_message",
