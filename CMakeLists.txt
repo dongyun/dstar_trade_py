@@ -34,7 +34,12 @@ set_target_properties(DstarTradeApi PROPERTIES
     IMPORTED_NO_SONAME TRUE
 )
 
-pybind11_add_module(_dstar_trade_py MODULE cpp/binding.cpp)
+pybind11_add_module(
+    _dstar_trade_py
+    MODULE
+    cpp/binding.cpp
+    cpp/field_converters.cpp
+)
 target_compile_features(_dstar_trade_py PRIVATE cxx_std_17)
 target_include_directories(_dstar_trade_py PRIVATE "${DSTAR_INCLUDE_DIR}")
 # Keep the linker configuration explicit for this Linux-only vendor library.

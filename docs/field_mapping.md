@@ -755,3 +755,6 @@ UDP认证请求。
 - 所有字段均有零值默认值：字符串为 `""`，整数/枚举为 `0`，浮点数为 `0.0`。
 - 枚举字段不强制转换成枚举实例，避免未知或交易所扩展值在解析时失败；调用方可按需使用 `EnumType(value)`。
 - `DstaApiRspLastReqIdField` 保留官方头文件中的 `Dsta` 拼写。
+- C++ binding 的 `to_py_dict(nullptr)` 统一返回空字典 `{}`，不返回悬空指针或借用对象。
+- 固定字符数组按 NUL 或数组边界截断并以 UTF-8 解码；非法字节使用 Unicode replacement character 替换。
+- callback 收到的结构体必须在回调栈内立即调用 `to_py_dict()`，Python 侧只保存复制后的字典。
