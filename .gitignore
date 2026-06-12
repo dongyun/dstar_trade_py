@@ -1,0 +1,33 @@
+# Python bytecode and test caches.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments and local environment files.
+.venv/
+venv/
+.env
+.env.*
+
+# Native and Python build outputs.
+build/
+dist/
+wheelhouse/
+*.egg-info/
+*.so
+!third_party/dstar/lib/linux/libdstartradeapi.so
+
+# CMake-generated files.
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+
+# Editor and operating-system metadata.
+.idea/
+.vscode/
+.DS_Store
+*~
+
