@@ -24,6 +24,9 @@ from .fields import (
     DstarApiMatchField,
     DstarApiOrderField,
     DstarApiReqLoginField,
+    DstarApiReqCmbOrderInsertField,
+    DstarApiReqOfferInsertField,
+    DstarApiReqOfferInsertNewField,
     DstarApiReqOrderDeleteField,
     DstarApiReqOrderInsertField,
     DstarApiReqPwdModField,
@@ -281,6 +284,22 @@ class DstarTradeClient:
                 self._position_query_inflight = False
                 self._condition.notify_all()
 
+    def get_system_info(self) -> dict[str, Any]:
+        """采集系统授权信息。
+
+        官方 ``GetSystemInfo`` 会返回同步错误码；这里统一调用 ``raise_for_error``，因此
+        调用方得到的结果一定是成功采集后的字典。该接口通常需要 Linux 系统权限。
+        """
+
+        result = self._require_api().get_system_info()
+        raise_for_error(int(result["return_code"]), "GetSystemInfo")
+        return result
+
+    def get_api_version(self) -> str:
+        """返回官方交易 API 版本号。"""
+
+        return self._require_api().get_api_version()
+
     def insert_order(
         self,
         *,
@@ -353,6 +372,135 @@ class DstarTradeClient:
         )
         ret = self._require_api().req_order_delete(request.to_dict())
         raise_for_error(ret, "ReqOrderDelete")
+        return ret
+
+    def insert_offer(
+        self,
+        *,
+        buy_offset: int,
+        sell_offset: int,
+        account_index: int,
+        client_req_id: int,
+        contract_index: int,
+        contract_no: str,
+        order_qty: int,
+        buy_price: float,
+        sell_price: float,
+        seat_index: int = 0,
+        enquiry_no: str = "",
+        reference: int = 0,
+        udp_auth_code: int = 0,
+    ) -> int:
+        """提交报价请求，返回官方本地请求返回码。"""
+
+        self._ensure_ready("insert_offer")
+        request = DstarApiReqOfferInsertField(
+            BuyOffset=buy_offset,
+            SellOffset=sell_offset,
+            AccountIndex=account_index,
+            ClientReqId=client_req_id,
+            ContractIndex=contract_index,
+            ContractNo=contract_no,
+            OrderQty=order_qty,
+            BuyPrice=buy_price,
+            SellPrice=sell_price,
+            SeatIndex=seat_index,
+            EnquiryNo=enquiry_no,
+            Reference=reference,
+            UdpAuthCode=udp_auth_code,
+        )
+        ret = self._require_api().req_offer_insert(request.to_dict())
+        raise_for_error(ret, "ReqOfferInsert")
+        return ret
+
+    def insert_offer_new(
+        self,
+        *,
+        buy_offset: int,
+        sell_offset: int,
+        account_index: int,
+        client_req_id: int,
+        contract_index: int,
+        contract_no: str,
+        buy_order_qty: int,
+        sell_order_qty: int,
+        buy_price: float,
+        sell_price: float,
+        seat_index: int = 0,
+        enquiry_no: str = "",
+        reference: int = 0,
+        udp_auth_code: int = 0,
+        replace_id: int = 0,
+    ) -> int:
+        """提交新版报价请求，返回官方本地请求返回码。"""
+
+        self._ensure_ready("insert_offer_new")
+        request = DstarApiReqOfferInsertNewField(
+            BuyOffset=buy_offset,
+            SellOffset=sell_offset,
+            AccountIndex=account_index,
+            ClientReqId=client_req_id,
+            ContractIndex=contract_index,
+            ContractNo=contract_no,
+            BuyOrderQty=buy_order_qty,
+            SellOrderQty=sell_order_qty,
+            BuyPrice=buy_price,
+            SellPrice=sell_price,
+            SeatIndex=seat_index,
+            EnquiryNo=enquiry_no,
+            Reference=reference,
+            UdpAuthCode=udp_auth_code,
+            ReplaceId=replace_id,
+        )
+        ret = self._require_api().req_offer_insert_new(request.to_dict())
+        raise_for_error(ret, "ReqOfferInsertNew")
+        return ret
+
+    def insert_cmb_order(
+        self,
+        *,
+        direct: int,
+        offset: int,
+        hedge: int,
+        order_type: int,
+        valid_type: int,
+        account_index: int,
+        contract_index1: int,
+        contract_no1: str,
+        contract_index2: int,
+        contract_no2: str,
+        order_qty: int,
+        order_price: float,
+        client_req_id: int,
+        seat_index: int = 0,
+        min_qty: int = 1,
+        reference: int = 0,
+        udp_auth_code: int = 0,
+    ) -> int:
+        """提交组合报单请求，返回官方本地请求返回码。"""
+
+        self._ensure_ready("insert_cmb_order")
+        request = DstarApiReqCmbOrderInsertField(
+            Direct=direct,
+            Offset=offset,
+            Hedge=hedge,
+            OrderType=order_type,
+            ValidType=valid_type,
+            SeatIndex=seat_index,
+            AccountIndex=account_index,
+            ContractIndex1=contract_index1,
+            ContractNo1=contract_no1,
+            ContractIndex2=contract_index2,
+            ContractNo2=contract_no2,
+            OrderQty=order_qty,
+            MinQty=min_qty,
+            OrderPrice=order_price,
+            ClientReqId=client_req_id,
+            Reference=reference,
+            UdpAuthCode=udp_auth_code,
+        )
+        ret = self._require_api().req_cmb_order_insert(request.to_dict())
+        raise_for_error(ret, "ReqCmbOrderInsert")
         return ret
 
     def query_last_client_req_id(self, timeout: float = 5) -> int:

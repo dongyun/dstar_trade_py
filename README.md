@@ -1,6 +1,6 @@
 # dstar_trade_py
 
-`dstar_trade_py` is a Python SDK project for wrapping the Esunny Dstar V10 domestic trade API. The project currently provides a minimal native binding that verifies the vendor library can be linked, loaded, created, queried for its version, and released. It does not implement trading operations or connect to a trading server.
+`dstar_trade_py` is a Python SDK project for wrapping the Esunny Dstar V10 domestic trade API. The project provides Linux native bindings, generated Python field models, synchronous and asyncio client layers, and guarded live-test examples for the vendor test environment.
 
 ## Platform Support
 
@@ -53,12 +53,32 @@ python -c 'import dstar_trade_py as d; print(d.get_api_version()); print(d.creat
 ## Tests
 
 ```bash
-python -m pytest tests/unit/test_native_load.py
 python -m pytest
+./scripts/run_tests.sh unit
+./scripts/run_tests.sh integration
 python examples/check_install.py
 ```
 
-The native load tests verify package import, a non-empty vendor version string, and successful API creation/release. No SPI callback, real account connection, or trade request is performed.
+The pytest suite is split into three marker categories:
+
+- `unit`: no real server and no real account; covers error codes, dataclasses, field conversion, event dispatch, state machines, and request validation.
+- `integration`: may load `libdstartradeapi.so`, create/free API objects, and read the vendor API version; never connects to a trading server.
+- `live`: connects to the Dstar test environment and requires real test credentials. These tests are skipped unless `DSTAR_RUN_LIVE_TESTS=1` is set.
+
+Pytest defaults to `not live`, so this is safe for CI and local development:
+
+```bash
+python -m pytest
+```
+
+Run live tests only after configuring the environment described in [`docs/live_testing.md`](docs/live_testing.md):
+
+```bash
+export DSTAR_RUN_LIVE_TESTS=1
+./scripts/run_tests.sh live
+```
+
+`./scripts/run_tests.sh all` includes live tests in the selection, but the live fixtures still skip unless `DSTAR_RUN_LIVE_TESTS=1` and all required `DSTAR_TRADE_*` variables are present. Live order-safety tests do not submit real orders by default.
 
 If the dynamic loader cannot find the vendor library, package import raises an error explaining that `libdstartradeapi.so` must be installed under `dstar_trade_py/.libs` or made available through `LD_LIBRARY_PATH`.
 

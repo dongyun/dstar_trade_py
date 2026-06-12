@@ -201,6 +201,18 @@ class AsyncDstarTradeClient(DstarTradeClient):
             if self._position_future is future:
                 self._position_future = None
 
+    async def get_system_info(self) -> dict[str, Any]:
+        """异步采集系统授权信息。"""
+
+        self._bind_loop()
+        return await asyncio.to_thread(super().get_system_info)
+
+    async def get_api_version(self) -> str:
+        """异步返回官方交易 API 版本号。"""
+
+        self._bind_loop()
+        return super().get_api_version()
+
     async def insert_order(self, **kwargs: Any) -> int:
         """异步提交普通报单，返回官方本地请求返回码。"""
 
@@ -212,6 +224,36 @@ class AsyncDstarTradeClient(DstarTradeClient):
 
         self._bind_loop()
         return super().cancel_order(**kwargs)
+
+    async def query_last_client_req_id(self, timeout: float = 5) -> int:
+        """异步查询最新客户请求号。"""
+
+        self._bind_loop()
+        return await asyncio.to_thread(super().query_last_client_req_id, timeout)
+
+    async def modify_password(self, *, new_password: str, old_password: str) -> int:
+        """异步提交密码修改请求，返回官方本地请求返回码。"""
+
+        self._bind_loop()
+        return super().modify_password(new_password=new_password, old_password=old_password)
+
+    async def insert_offer(self, **kwargs: Any) -> int:
+        """异步提交报价请求，返回官方本地请求返回码。"""
+
+        self._bind_loop()
+        return super().insert_offer(**kwargs)
+
+    async def insert_offer_new(self, **kwargs: Any) -> int:
+        """异步提交新版报价请求，返回官方本地请求返回码。"""
+
+        self._bind_loop()
+        return super().insert_offer_new(**kwargs)
+
+    async def insert_cmb_order(self, **kwargs: Any) -> int:
+        """异步提交组合报单请求，返回官方本地请求返回码。"""
+
+        self._bind_loop()
+        return super().insert_cmb_order(**kwargs)
 
     async def close(self) -> None:
         """关闭客户端并唤醒异步迭代器。"""

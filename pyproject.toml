@@ -41,4 +41,9 @@ build-dir = "build/{wheel_tag}"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+addopts = "-ra -m 'not live'"
+markers = [
+    "unit: fast tests that never connect to a real Dstar trade server or require real credentials",
+    "integration: tests that may load libdstartradeapi.so but never connect to a real trade server",
+    "live: tests that require DSTAR_RUN_LIVE_TESTS=1 and real Dstar test-account environment variables",
+]
