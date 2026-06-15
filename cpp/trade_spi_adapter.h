@@ -2,6 +2,8 @@
 #define DSTAR_TRADE_PY_TRADE_SPI_ADAPTER_H
 
 // Adapter from the vendor IDstarTradeSpi callback interface to a Python dispatcher.
+#include <functional>
+
 #include <pybind11/pybind11.h>
 
 #include "DstarTradeApi.h"
@@ -9,6 +11,7 @@
 namespace dstar_trade_py {
 
 namespace py = pybind11;
+using PayloadFactory = std::function<py::dict()>;
 
 class PyTradeSpiAdapter final : public IDstarTradeSpi {
 public:
@@ -62,8 +65,9 @@ public:
     void OnRspQryFund(const DstarApiFundField *pFund) override;
 
 private:
-    // Dispatch an already-copied payload dictionary to Python safely.
-    void dispatch_event(const char* event_name, py::dict payload) noexcept;
+    // Build and dispatch the payload while holding the GIL. Vendor callbacks
+    // run on SDK-owned threads, so even constructing py::dict requires this.
+    void dispatch_event(const char* event_name, const PayloadFactory& payload_factory) noexcept;
 
     py::object dispatcher_;
 };
