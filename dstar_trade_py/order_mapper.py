@@ -235,12 +235,19 @@ class DstarOrderMapper:
         rsp = _coerce_rsp_order_insert(response)
         with self._lock:
             state = self._find_state(request_id=rsp.ClientReqId)
+            if rsp.OrderId:
+                state = self._merge_exchange_order_state(state, rsp.OrderId)
             state.last_error_code = rsp.ErrCode
             if rsp.OrderId:
                 state.exchange_order_id = rsp.OrderId
                 self._client_id_by_exchange_order_id[rsp.OrderId] = state.client_order_id
             if rsp.ErrCode == 0:
-                self._transition(state, DstarOrderLifecycleStatus.ACCEPTED)
+                if state.status in {
+                    DstarOrderLifecycleStatus.CREATED,
+                    DstarOrderLifecycleStatus.SUBMITTED,
+                    DstarOrderLifecycleStatus.ACCEPTED,
+                }:
+                    self._transition(state, DstarOrderLifecycleStatus.ACCEPTED)
             else:
                 self._transition(state, DstarOrderLifecycleStatus.REJECTED)
             self._append_state("dstar_order_rsp_insert", state, payload=rsp)
@@ -251,7 +258,7 @@ class DstarOrderMapper:
 
         rtn = _coerce_order(order)
         with self._lock:
-            state = self._find_state(exchange_order_id=rtn.OrderId)
+            state = self._find_state_or_recover_from_order(rtn)
             if rtn.OrderId:
                 state.exchange_order_id = rtn.OrderId
                 self._client_id_by_exchange_order_id[rtn.OrderId] = state.client_order_id
@@ -271,7 +278,7 @@ class DstarOrderMapper:
         rtn = _coerce_match(match)
         match_key = _match_key(rtn)
         with self._lock:
-            state = self._find_state(exchange_order_id=rtn.OrderId)
+            state = self._find_state_or_recover_from_match(rtn)
             if rtn.OrderId:
                 state.exchange_order_id = rtn.OrderId
                 self._client_id_by_exchange_order_id[rtn.OrderId] = state.client_order_id
@@ -318,6 +325,32 @@ class DstarOrderMapper:
             client_order_id = self._client_id_by_exchange_order_id.get(int(exchange_order_id))
             return self._orders_by_client_id.get(client_order_id) if client_order_id else None
 
+    def recover_unknown_order(
+        self,
+        *,
+        exchange_order_id: int,
+        order_qty: int,
+        system_no: str = "",
+    ) -> DstarOrderLifecycle:
+        """Create or return a lifecycle state for an order not submitted locally."""
+
+        with self._lock:
+            existing = self.get_by_exchange_order_id(exchange_order_id)
+            if existing is not None:
+                return existing
+            synthetic_request_id = -int(exchange_order_id) if exchange_order_id else self._next_unknown_request_id()
+            state = DstarOrderLifecycle(
+                client_order_id=f"unknown-order-{exchange_order_id or abs(synthetic_request_id)}",
+                request_id=synthetic_request_id,
+                order_qty=max(int(order_qty), 1),
+                status=DstarOrderLifecycleStatus.ACCEPTED,
+                exchange_order_id=int(exchange_order_id),
+                system_no=system_no,
+            )
+            self._store_state(state)
+            self._append_state("dstar_order_unknown_recovered", state)
+            return state
+
     def replay(self) -> list[DstarOrderLifecycle]:
         """Return recovered states in journal order for backtest/recovery checks."""
 
@@ -350,6 +383,70 @@ class DstarOrderMapper:
             if mapped_id is not None:
                 return self._orders_by_client_id[mapped_id]
         raise KeyError("unknown order identity")
+
+    def _find_state_or_recover_from_order(self, order: DstarApiOrderField) -> DstarOrderLifecycle:
+        try:
+            return self._find_state(exchange_order_id=order.OrderId)
+        except KeyError:
+            return self.recover_unknown_order(
+                exchange_order_id=order.OrderId,
+                order_qty=order.OrderQty or order.MatchQty or 1,
+                system_no=order.SystemNo,
+            )
+
+    def _find_state_or_recover_from_match(self, match: DstarApiMatchField) -> DstarOrderLifecycle:
+        try:
+            return self._find_state(exchange_order_id=match.OrderId)
+        except KeyError:
+            return self.recover_unknown_order(
+                exchange_order_id=match.OrderId,
+                order_qty=match.MatchQty or 1,
+                system_no=match.SystemNo,
+            )
+
+    def _next_unknown_request_id(self) -> int:
+        candidate = -1
+        while candidate in self._client_id_by_request_id:
+            candidate -= 1
+        return candidate
+
+    def _merge_exchange_order_state(
+        self,
+        preferred: DstarOrderLifecycle,
+        exchange_order_id: int,
+    ) -> DstarOrderLifecycle:
+        existing_client_order_id = self._client_id_by_exchange_order_id.get(int(exchange_order_id))
+        if not existing_client_order_id or existing_client_order_id == preferred.client_order_id:
+            return preferred
+        existing = self._orders_by_client_id.get(existing_client_order_id)
+        if existing is None:
+            return preferred
+
+        preferred.exchange_order_id = int(exchange_order_id)
+        preferred.system_no = preferred.system_no or existing.system_no
+        preferred.filled_qty = max(preferred.filled_qty, existing.filled_qty)
+        preferred.avg_fill_price = existing.avg_fill_price or preferred.avg_fill_price
+        preferred.last_order_state = preferred.last_order_state or existing.last_order_state
+        preferred.last_error_code = preferred.last_error_code or existing.last_error_code
+        preferred.match_ids.update(existing.match_ids)
+        if existing.status == DstarOrderLifecycleStatus.FILLED:
+            preferred.status = (
+                DstarOrderLifecycleStatus.FILLED
+                if preferred.filled_qty >= preferred.order_qty
+                else DstarOrderLifecycleStatus.PARTIALLY_FILLED
+            )
+        elif existing.status in {
+            DstarOrderLifecycleStatus.REJECTED,
+            DstarOrderLifecycleStatus.CANCELLED,
+            DstarOrderLifecycleStatus.PARTIALLY_FILLED,
+        }:
+            preferred.status = existing.status
+        self._orders_by_client_id.pop(existing_client_order_id, None)
+        self._client_id_by_request_id.pop(existing.request_id, None)
+        self._client_id_by_exchange_order_id[int(exchange_order_id)] = preferred.client_order_id
+        self._store_state(preferred)
+        self._append_state("dstar_order_unknown_merged", preferred)
+        return preferred
 
     def _transition(self, state: DstarOrderLifecycle, next_status: DstarOrderLifecycleStatus) -> None:
         if state.status in TERMINAL_ORDER_STATUSES and next_status != state.status:

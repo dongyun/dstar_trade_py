@@ -1,179 +1,129 @@
-# dstar_trade_py 架构说明
+# Dstar Execution Adapter Architecture
 
-本文说明 `dstar_trade_py` 如何把易盛启明星 V10 内盘交易 C++ SDK 封装为 Linux-only Python SDK。
+本文说明 `NautilusTrader -> Dstar Execution Adapter -> dstar_trade_py -> 易盛启明星 V10`
+的执行适配器架构。这里的 adapter 是 `dstar_trade_py` 之上的业务层，不修改 vendor native SDK。
 
-## 整体架构
-
-```text
-Python 应用
-  |
-  | 调用同步/异步高层客户端
-  v
-dstar_trade_py.client / dstar_trade_py.async_client
-  |
-  | 传入 dict / dataclass，接收 dataclass / 事件队列
-  v
-pybind11 扩展 dstar_trade_py._dstar_trade_py
-  |
-  | 持有 IDstarTradeApi*，注册 IDstarTradeSpi adapter
-  v
-官方 C++ SDK: libdstartradeapi.so
-  |
-  | TCP/UDP 与交易前置、柜台通信
-  v
-易盛测试或生产交易环境
-```
-
-项目分层：
-
-| 层级 | 目录/模块 | 职责 |
-| --- | --- | --- |
-| 官方 SDK | `third_party/dstar/` | 官方头文件和 `libdstartradeapi.so`，不修改。 |
-| C++ binding | `cpp/` | pybind11 扩展、结构体转换、SPI 回调适配、RAII 生命周期。 |
-| Python 数据层 | `fields.py`、`enums.py`、`errors.py` | dataclass、枚举、错误码和异常体系。 |
-| Python client | `client.py` | 同步高层 API、状态机、事件队列、请求号和 journal。 |
-| asyncio client | `async_client.py` | asyncio 包装，线程安全投递回调到事件循环。 |
-| 配置与安全 | `config.py`、`order_management.py` | 环境变量、日志脱敏、请求号、订单状态、幂等保护。 |
-| 示例和测试 | `examples/`、`tests/` | dry-run demo、unit/integration/live tests。 |
-
-## C++ SDK、pybind11、Python Client 的关系
-
-官方接口核心是两个 C++ virtual class：
-
-- `IDstarTradeApi`：主动接口，例如 `Init`、`ReqOrderInsert`、`ReqQryFund`。
-- `IDstarTradeSpi`：回调接口，例如 `OnRspUserLogin`、`OnRtnOrder`、`OnRtnMatch`。
-
-Python 不能用 `ctypes` 安全调用 C++ virtual class，因此本项目使用 pybind11：
-
-- `NativeTradeApi` 在 C++ 中持有 `IDstarTradeApi*`。
-- 构造函数调用 `CreateDstarTradeApi()`。
-- 析构函数调用 `FreeDstarTradeApi()`。
-- Python 只看到 `NativeTradeApi` 方法，不接触裸指针。
-- C++ 回调把官方结构体立即复制为 Python-owned `dict`，再交给 Python dispatcher。
-
-示例：
-
-```python
-from dstar_trade_py import NativeTradeApi
-
-api = NativeTradeApi()
-print(api.get_api_version())
-api.set_api_log_path("/tmp/dstar/native")
-```
-
-这段代码只演示本地 API 对象生命周期，不连接真实交易服务器。
-
-## 回调线程模型
-
-官方 SDK 的 SPI 回调可能运行在 SDK 自己的工作线程，而不是 Python 主线程。
-
-C++ adapter 的处理原则：
-
-1. 回调进入 `PyTradeSpiAdapter::OnXXX`。
-2. 立即把官方结构体指针复制为 `py::dict`，不把指针交给 Python 保存。
-3. 获取 Python GIL。
-4. 调用 Python dispatcher：`dispatcher.on_event(event_name, payload)`。
-5. 捕获所有 Python/C++ 异常，不能让异常穿透回官方 SDK。
-
-同步客户端的事件流：
+## System Boundary
 
 ```text
-SDK 回调线程
-  -> C++ adapter 获取 GIL
+NautilusTrader ExecutionEngine
+  |
+  | SubmitOrder / CancelOrder / QueryAccount / Reconciliation
+  v
+DstarExecutionClient
+  |
+  +-- DstarConnectionManager
+  +-- DstarOrderMapper
+  +-- DstarEventAdapter
+  +-- DstarRecoveryEngine
+  +-- DstarJournal
+  |
+  v
+dstar_trade_py.DstarTradeClient
+  |
+  v
+pybind11 NativeTradeApi
+  |
+  v
+libdstartradeapi.so
+  |
+  v
+易盛启明星 V10 内盘交易系统
+```
+
+适配器只支持 Linux x86_64 + Python 3.10+。如果接入特定版本 NautilusTrader，需要再校验该版本的
+Python 版本要求；较新的 NautilusTrader 版本可能要求 Python 3.12+。
+
+## Module Responsibilities
+
+| Module | Responsibility | Input | Output |
+| --- | --- | --- | --- |
+| `DstarExecutionClient` | Nautilus 执行入口，负责调用各子模块 | Nautilus commands | Nautilus execution events |
+| `DstarConnectionManager` | 创建、登录、等待 ready、关闭和基础重连 | `DSTAR_TRADE_*` env/config | ready `DstarTradeClient` |
+| `DstarOrderMapper` | 订单请求转换和本地状态机 | Nautilus-like order, Dstar callbacks | `ReqOrderInsert` field, lifecycle state |
+| `DstarEventAdapter` | SPI callback 到 Nautilus-style event 的转换 | `rsp_order_insert`, `rtn_order`, `rtn_match` 等 | `DstarNautilusEvent` |
+| `DstarRecoveryEngine` | 启动或重连后的状态恢复 | journal, query snapshots, pending callbacks | `DstarRecoveryResult` |
+| `DstarJournal` | JSONL 幂等、去重和恢复索引 | intents, callbacks, emitted events | append-only records |
+
+当前实现不直接 import NautilusTrader，而是输出 `DstarNautilusEvent` 这种轻量事件对象。真正接入
+Nautilus 时，`DstarExecutionClient` 负责把它转换成 Nautilus 原生 `OrderAccepted`、
+`OrderFilled`、`AccountState` 等事件。
+
+## Startup Sequence
+
+```text
+process start
+  -> load config from DSTAR_TRADE_* env
+  -> create DstarConnectionManager
+  -> create DstarOrderMapper(journal)
+  -> create DstarEventAdapter(order_mapper, journal)
+  -> create DstarRecoveryEngine(client, mapper, adapter)
+  -> connection.connect()
+  -> connection.login()
+  -> client.wait_login(timeout)
+  -> connection.wait_ready()
+  -> recovery.recover()
+  -> start event dispatcher loop
+  -> allow Nautilus order commands
+```
+
+`wait_ready()` 是交易门槛。`login()` 或 native `Init()` 成功不能视为可交易。
+
+## Order Submission Sequence
+
+```text
+Nautilus SubmitOrder
+  -> DstarOrderMapper.map_order_to_insert_request()
+       - allocate/reserve ClientReqId
+       - register client_order_id
+       - write dstar_order_created to journal
+  -> DstarTradeClient.insert_limit_order(...)
+       - local ReqOrderInsert call
+       - local ret returned
+  -> DstarOrderMapper.mark_submitted(ret)
+       - ret=0 => Submitted only
+       - ret!=0 => Rejected local failure
+  -> wait for SPI callbacks
+```
+
+`ReqOrderInsert` 返回 `0` 只表示本地 API 接收了请求，不表示柜台接受、交易所排队或成交。
+
+## Callback Sequence
+
+```text
+SDK callback thread
+  -> pybind11 copies C++ struct to Python dict
   -> DstarTradeClient.on_event(...)
-  -> 转 dataclass
-  -> 更新状态
-  -> 写 raw_events / order_events / trade_events
-  -> notify Condition
+  -> adapter DstarEventAdapter.on_event(...)
+       - Queue.put(envelope)
+       - return immediately
+
+event dispatcher thread
+  -> adapter.process_next()
+  -> journal callback dedupe
+  -> order mapper updates lifecycle
+  -> journal emitted-event dedupe
+  -> DstarNautilusEvent
+  -> DstarExecutionClient converts to Nautilus native event
 ```
 
-asyncio 客户端的事件流：
+callback thread 不做重连、不做阻塞查询、不直接调用 Nautilus msgbus。它只入队。
 
-```text
-SDK 回调线程
-  -> AsyncDstarTradeClient.on_event(...)
-  -> loop.call_soon_threadsafe(...)
-  -> 事件循环线程中转换 dataclass、更新状态、唤醒 Future
-```
+## dstar_trade_py Limitations
 
-不能在 SDK 回调线程直接操作 `asyncio.Future`，否则会破坏 asyncio 对象的线程亲和性。
+当前 `dstar_trade_py.DstarTradeClient` 已确认支持：
 
-## 生命周期
+- `connect`, `login`, `wait_ready`, `close`
+- `insert_order`, `insert_limit_order`, `cancel_order`
+- `query_fund`, `query_position`, `query_last_client_req_id`
+- SPI callback: `OnRspOrderInsert`, `OnRtnOrder`, `OnRtnMatch`, 初始化 `OnRspOrder`, `OnRspMatch`
 
-同步客户端推荐流程：
+当前未确认或未暴露：
 
-```python
-from dstar_trade_py import DstarTradeClient
+- 主动 `query_order` / `ReqQryOrder`
+- 主动 `query_trade` / `ReqQryTrade`
+- 原生改单 `ReqOrderModify`
+- 批量撤单
 
-client = DstarTradeClient(
-    front_ip="61.163.243.173",
-    front_port=6668,
-    account_no="你的账号",
-    password="你的密码",
-    app_id="你的APPID",
-    license_no="你的AuthCode",
-    api_log_path="/tmp/dstar/native",
-)
-
-try:
-    client.connect()
-    client.login()
-    client.wait_ready(timeout=30)
-    fund = client.query_fund(timeout=5)
-    print(fund)
-finally:
-    client.close()
-```
-
-生命周期状态：
-
-| 状态 | 含义 |
-| --- | --- |
-| `created` | Python client 已创建 native API 对象。 |
-| `connected` | 已注册 callback、前置地址和本地参数；真实连接由 `Init` 触发。 |
-| `initialized` | `Init()` 本地同步返回成功。 |
-| `logged_in` | 收到 `rsp_user_login` 且错误码为 0。 |
-| `api_ready` | 收到 `api_ready`，允许查询和下单。 |
-| `disconnected` | 收到断线或关闭状态。 |
-
-注意：`Init()` 返回 0 不代表登录完成，`ReqOrderInsert()` 返回 0 不代表委托最终成功。最终状态必须以后续回报为准。
-
-## 请求、回报和状态
-
-下单路径：
-
-```text
-insert_limit_order(...)
-  -> 分配/预留 ClientReqId
-  -> 检查 client_order_id 幂等
-  -> 转 DstarApiReqOrderInsertField dict
-  -> NativeTradeApi.req_order_insert(...)
-  -> 写 order_journal.jsonl
-  -> 返回本地同步 ret
-```
-
-回报路径：
-
-```text
-OnRspOrderInsert -> rsp_order_insert -> OrderStateManager.on_rsp_order_insert
-OnRtnOrder       -> rtn_order        -> OrderStateManager.on_rtn_order
-OnRtnMatch       -> rtn_match        -> OrderStateManager.on_rtn_match
-```
-
-示例格式，非真实交易结果：
-
-```text
-[示例格式] ReqOrderInsert local return code: 0
-[示例格式] rsp_order_insert: ErrCode=0, OrderId=10001
-[示例格式] rtn_order: OrderState=50, MatchQty=0
-[示例格式] rtn_match: MatchQty=1, MatchPrice=3000.0
-```
-
-上述数字只是格式示例，不代表真实柜台或交易所返回。
-
-## Linux-only 边界
-
-- CMake 在非 Linux 平台拒绝构建。
-- Python 包在非 Linux 平台可以 import 纯 Python 辅助模块。
-- 非 Linux 平台创建 `NativeTradeApi()`、调用 `get_api_version()` 或 `create_and_free_api()` 会抛出清晰错误。
-- 真实交易功能只支持 Linux + 官方 `libdstartradeapi.so`。
+因此 recovery 对订单/成交查询是能力自适应的：如果 client 有 `query_order/query_trade` 就调用；
+否则依赖 journal、初始化快照回调和实时回调恢复订单状态。

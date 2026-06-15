@@ -1,98 +1,150 @@
-# 安全说明
+# Security
 
-本文档说明 `dstar_trade_py` 对账号、密码、授权码、APPID、下单确认和本地日志的处理边界。
+本文说明 Dstar Execution Adapter 的安全边界。目标是防止误连、误下单、凭证泄露和重复成交事件。
 
-## 不提交账号密码
+## Non-Negotiable Rules
 
-不要把真实账号、密码、AuthCode、APPID 写入源码、测试、示例或文档。也不要把这些值写入
-`.env` 后提交到 Git。
+- 默认测试和 demo 不能真实下单。
+- CI 默认不能运行 live tests。
+- `DSTAR_RUN_LIVE_TESTS` 必须等于 `1` 才允许 live tests。
+- `ReqOrderInsert ret=0` 不能视为成功下单。
+- 订单最终状态必须来自 SPI 回调。
+- 不修改 `third_party/dstar` 或官方 SDK 解压目录下的 native 文件。
+- 不打印 password、AuthCode、AppId、LicenseNo。
 
-推荐做法：
+## Credential Handling
+
+使用环境变量传递凭证：
 
 ```bash
-export DSTAR_TRADE_IP=61.163.243.173
-export DSTAR_TRADE_PORT=6668
-export DSTAR_TRADE_USER=你的模拟账号
-export DSTAR_TRADE_PASSWORD=你的模拟密码
-export DSTAR_TRADE_AUTH_CODE=你的授权码
-export DSTAR_TRADE_APP_ID=你的APPID
-export DSTAR_TRADE_LOG_PATH=/tmp/dstar_trade_py/native_logs
+export DSTAR_TRADE_IP=...
+export DSTAR_TRADE_PORT=...
+export DSTAR_TRADE_USER=...
+export DSTAR_TRADE_PASSWORD=...
+export DSTAR_TRADE_AUTH_CODE=...
+export DSTAR_TRADE_APP_ID=...
 ```
 
-## 环境变量配置
+禁止：
 
-`dstar_trade_py.config.DstarTradeConfig` 支持从 `DSTAR_TRADE_*` 环境变量加载配置：
+- 把真实凭证写入源码、测试、文档示例或 Git
+- 记录 `config.to_client_kwargs()`
+- 把 `.env` 提交到仓库
+- 在异常信息中拼接 password/auth
 
-```python
-from dstar_trade_py.config import load_config_from_env
-
-config = load_config_from_env(require_credentials=True)
-client_kwargs = config.to_client_kwargs()
-```
-
-打印或记录配置时使用：
+允许记录：
 
 ```python
 config.to_redacted_dict()
 ```
 
-该方法会脱敏 `password`、`auth_code`、`app_id` 以及 `UdpAuthCode`、`LicenseNo` 等授权字段变体。
-
-## 下单 Demo 确认机制
-
-真实下单 demo 默认 dry-run，不会发送真实请求。必须显式传入 `--confirm-live-order`，并在二次
-确认提示中手工输入 `YES`，才会调用真实下单或撤单接口。
-
-这只是一层示例保护，不替代生产系统的风控。生产系统仍应实现：
-
-- 交易账号白名单；
-- 合约白名单；
-- 最大手数和最大金额限制；
-- 重复下单保护；
-- 请求号和业务订单号管理；
-- 人工或系统级 kill switch。
-
-## Journal 脱敏
-
-本地订单 journal 默认写入：
+## Live Test Gate
 
 ```text
-logs/order_journal.jsonl
+pytest default
+  -> addopts -m "not live"
+  -> live tests deselected
+
+pytest -m live
+  -> tests/live/conftest.py
+  -> require DSTAR_RUN_LIVE_TESTS=1
+  -> require DSTAR_TRADE_* credentials
 ```
 
-journal 用于恢复近期请求号、`client_order_id` 幂等键和订单状态。写入前会递归过滤敏感字段，
-包括但不限于：
+`DSTAR_RUN_LIVE_TESTS=0`、空值或未设置都不是 live enabled。
+
+## Dry-Run Order Safety
+
+下单 demo 必须默认 dry-run：
+
+```text
+run order demo
+  -> print order summary
+  -> confirm_flag?
+       no  -> do not call insert_order/cancel_order
+       yes -> require manual YES
+  -> only then call real SDK method
+```
+
+测试只能验证 dry-run 阻断路径，不能在默认 CI 中发送真实 order insert 或 cancel。
+
+## Journal Security
+
+Journal 用于幂等和恢复，不是审计级交易流水。
+
+Journal 会记录：
+
+- `client_order_id`
+- `ClientReqId`
+- `OrderId`
+- `SystemNo`
+- state snapshot
+- callback/event dedupe key
+- non-sensitive payload fields
+
+Journal 会过滤：
 
 - `password`
 - `passwd`
+- `auth`
 - `auth_code`
 - `UdpAuthCode`
 - `app_id`
-- `AppId`
 - `LicenseNo`
 - `secret`
 - `token`
 
-journal 不是审计级交易流水。生产环境如果要长期保存，应放在权限受控目录，并按业务合规要求
-做轮转、备份和清理。
+生产环境应把 journal 放在权限受控目录，做轮转和备份。不要把 journal 提交到 Git。
 
-## 日志脱敏
+## Native SDK Logs
 
-项目使用 Python `logging`，并提供 `SensitiveDataFilter`：
+官方 SDK 原生日志由 vendor library 写入，Python 层不能保证完全脱敏。
 
-```python
-from dstar_trade_py import configure_logging
+要求：
 
-configure_logging("INFO")
+- `DSTAR_TRADE_LOG_PATH` 指向权限受控目录
+- 目录不进入 Git
+- 生产环境做 logrotate
+- 线上排障时先脱敏再共享
+
+## Idempotency Security
+
+重复下单和重复成交都属于安全问题。
+
+| Risk | Protection |
+| --- | --- |
+| 重复 `client_order_id` | `DstarOrderMapper` 启动时从 journal 恢复并拒绝重复 |
+| 重复 `ClientReqId` | `RequestIdManager` 恢复 used ids |
+| 重复 callback | `dstar_callback_seen` journal key |
+| 重复 emitted event | `dstar_event_emitted` journal key |
+| 重复 fill | `MatchId` / fallback match key |
+
+## Recovery Safety
+
+Recovery 只查询，不下单：
+
+```text
+recover
+  -> query_order if available
+  -> query_trade if available
+  -> query_position
+  -> query_fund
+  -> drain pending callbacks
 ```
 
-该 filter 会对日志文本中的密码、AuthCode、APPID、LicenseNo、token 等字段进行脱敏。不要绕过
-SDK 的日志工具直接打印完整配置，也不要在业务日志里记录完整请求 payload。
+当前 `dstar_trade_py` 没有主动 `query_order/query_trade`，engine 会跳过这些 capability，不会假装已经恢复服务端全部历史订单。
 
-官方 SDK 原生日志路径由 `api_log_path` / `DSTAR_TRADE_LOG_PATH` 控制。官方原生日志的内容由
-vendor 动态库生成，Python 层无法保证其中所有字段都已脱敏，因此该目录必须设置严格文件权限。
+## Operational Controls
 
-## Linux 权限边界
+生产系统还需要上层风控：
 
-`GetSystemInfo` 可能读取系统硬件信息，某些机器上需要 root 或 sudo 才能获取完整数据。不要为了
-方便长期用 root 运行交易进程；如果授权采集需要提升权限，应把采集步骤和交易进程权限分离。
+- 账号白名单
+- 合约白名单
+- 最大手数
+- 最大名义金额
+- 交易时段限制
+- kill switch
+- 单策略限频
+- 人工确认或审批机制
+
+这些不属于 `dstar_trade_py` native binding 能力，必须在 Execution Adapter 或更上层系统实现。

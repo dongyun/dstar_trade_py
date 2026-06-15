@@ -5,6 +5,7 @@ correct class:
 
 - ``tests/live`` -> live
 - ``tests/integration`` -> integration
+- ``tests/mock_sdk`` -> mock_sdk
 - all other tests -> unit
 """
 
@@ -25,5 +26,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             item.add_marker(pytest.mark.live)
         elif "integration" in parts:
             item.add_marker(pytest.mark.integration)
+        elif "mock_sdk" in parts:
+            item.add_marker(pytest.mark.mock_sdk)
         else:
             item.add_marker(pytest.mark.unit)

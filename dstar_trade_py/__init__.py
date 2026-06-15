@@ -78,6 +78,13 @@ from .order_mapper import (
     DstarOrderLifecycleStatus,
     DstarOrderMapper,
 )
+from .event_adapter import (
+    DstarCallbackEnvelope,
+    DstarEventAdapter,
+    DstarNautilusEvent,
+    DstarNautilusEventType,
+)
+from .recovery_engine import DstarRecoveryEngine, DstarRecoveryResult
 
 __all__ = [
     "IS_LINUX_BUILD",
@@ -95,7 +102,11 @@ __all__ = [
     "DstarConnectionManager",
     "DstarError",
     "DstarErrorCode",
+    "DstarCallbackEnvelope",
+    "DstarEventAdapter",
     "DstarNativeError",
+    "DstarNautilusEvent",
+    "DstarNautilusEventType",
     "DstarRequestError",
     "DstarTimeoutError",
     "DstarField",
@@ -103,6 +114,8 @@ __all__ = [
     "DstarOrderLifecycle",
     "DstarOrderLifecycleStatus",
     "DstarOrderMapper",
+    "DstarRecoveryEngine",
+    "DstarRecoveryResult",
     "ENUM_BY_CPP_TYPE",
     "ManagedOrderState",
     "OrderJournal",
