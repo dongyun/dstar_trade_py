@@ -33,6 +33,7 @@ except ImportError as exc:
 from .config import PACKAGE_LOGGER_NAME
 from .enums import Direction, Hedge, Offset, OrderType, RealTimeDataFilter, RunMode, ValidType
 from .errors import (
+    DstarAuthError,
     DstarErrorCode,
     DstarRequestError,
     DstarTimeoutError,
@@ -444,6 +445,9 @@ class DstarTradeClient:
         self._latest_last_req_id: DstaApiRspLastReqIdField | None = None
         self._last_req_id_inflight = False
 
+        self._login_generation = 0
+        self._last_login_error_code: int | None = None
+
     def connect(self, *, front_ip: str | None = None, front_port: int | None = None) -> None:
         """注册回调、前置地址和本地运行参数。
 
@@ -520,6 +524,10 @@ class DstarTradeClient:
             self.app_id = app_id
         if license_no is not None:
             self.license_no = license_no
+        with self._condition:
+            self.logged_in = False
+            self._last_login_error_code = None
+            self._condition.notify_all()
         login_info = DstarApiReqLoginField(
             AccountNo=self.account_no,
             Password=self.password,
@@ -534,6 +542,34 @@ class DstarTradeClient:
         with self._condition:
             self.initialized = True
             self._condition.notify_all()
+
+    def wait_login(self, timeout: float = 30) -> None:
+        """Wait for ``rsp_user_login`` and raise clearly on login rejection."""
+
+        with self._condition:
+            start_generation = self._login_generation
+            if self.logged_in:
+                return
+            if self._last_login_error_code not in (None, int(DstarErrorCode.SUCCESS)):
+                code = self._last_login_error_code
+                raise DstarAuthError(code, get_error_message(code), "login")
+
+        self._wait_for(
+            lambda: self.logged_in
+            or self._login_generation > start_generation
+            or self.disconnected
+            or not self.created,
+            timeout,
+            "wait_login",
+        )
+
+        with self._condition:
+            if self.logged_in:
+                return
+            if self._last_login_error_code not in (None, int(DstarErrorCode.SUCCESS)):
+                code = self._last_login_error_code
+                raise DstarAuthError(code, get_error_message(code), "login")
+        raise DstarTimeoutError(-1, "Timed out waiting for login response", "login")
 
     def wait_ready(self, timeout: float = 30) -> None:
         """等待 ``api_ready`` 回调。
@@ -1040,6 +1076,8 @@ class DstarTradeClient:
             return
         if event_name == "rsp_user_login" and isinstance(data, DstarApiRspLoginField):
             self.logged_in = data.ErrorCode == int(DstarErrorCode.SUCCESS)
+            self._last_login_error_code = data.ErrorCode
+            self._login_generation += 1
             return
         if event_name == "api_ready":
             logger.info("Dstar native API is ready")

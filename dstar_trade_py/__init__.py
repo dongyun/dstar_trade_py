@@ -64,12 +64,19 @@ from .errors import (
 from .enums import ENUM_BY_CPP_TYPE
 from .fields import STRUCT_MODELS, DstarField
 from .client import CancelRequestBuilder, DstarClientEvent, DstarTradeClient, OrderRequestBuilder
+from .connection_manager import DstarConnectionManager
 from .async_client import AsyncDstarTradeClient
 from .order_management import (
     ManagedOrderState,
     OrderJournal,
     OrderStateManager,
     RequestIdManager,
+)
+from .order_mapper import (
+    DstarMappedOrder,
+    DstarOrderLifecycle,
+    DstarOrderLifecycleStatus,
+    DstarOrderMapper,
 )
 
 __all__ = [
@@ -85,12 +92,17 @@ __all__ = [
     "SensitiveDataFilter",
     "DstarAuthError",
     "DstarConnectionError",
+    "DstarConnectionManager",
     "DstarError",
     "DstarErrorCode",
     "DstarNativeError",
     "DstarRequestError",
     "DstarTimeoutError",
     "DstarField",
+    "DstarMappedOrder",
+    "DstarOrderLifecycle",
+    "DstarOrderLifecycleStatus",
+    "DstarOrderMapper",
     "ENUM_BY_CPP_TYPE",
     "ManagedOrderState",
     "OrderJournal",
