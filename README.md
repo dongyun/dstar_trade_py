@@ -1,6 +1,5 @@
 # dstar_trade_py
 
-
 `dstar_trade_py` 是一个 Linux-only Python SDK 项目，用于代理易盛启明星 V10 内盘交易 API。
 
 项目提供：
